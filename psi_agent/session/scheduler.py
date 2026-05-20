@@ -1,0 +1,110 @@
+from __future__ import annotations
+
+import re
+import time
+from dataclasses import dataclass, field
+from pathlib import Path
+
+import yaml
+from croniter import croniter
+from loguru import logger
+
+
+@dataclass
+class Schedule:
+    name: str
+    cron: str
+    task_content: str
+    _cron_iter: croniter = field(init=False)
+    _last_run: float = field(default=0.0, init=False)
+    _pending_response: list[dict] | None = field(default=None, init=False)
+
+    def __post_init__(self) -> None:
+        self._cron_iter = croniter(self.cron, time.time())
+        self._last_run = time.time()
+
+    @property
+    def pending_response(self) -> list[dict] | None:
+        return self._pending_response
+
+    @pending_response.setter
+    def pending_response(self, value: list[dict] | None) -> None:
+        self._pending_response = value
+
+    @property
+    def has_pending(self) -> bool:
+        return self._pending_response is not None
+
+    def clear_pending(self) -> None:
+        self._pending_response = None
+
+    def get_next_run(self) -> float:
+        return self._cron_iter.get_next()
+
+    def get_prev_run(self) -> float:
+        return self._cron_iter.get_prev()
+
+    def should_run_now(self) -> bool:
+        now = time.time()
+        prev = self.get_prev_run()
+        # Reset prev to get an accurate comparison
+        self._cron_iter = croniter(self.cron, now)
+        prev_time = self._cron_iter.get_prev()
+        # Re-set for get_next
+        self._cron_iter = croniter(self.cron, now)
+        return prev_time > self._last_run
+
+    def mark_run(self) -> None:
+        self._last_run = time.time()
+
+    def to_user_message(self) -> dict:
+        return {
+            "role": "user",
+            "content": f"[Schedule Task: {self.name}]\n\n{self.task_content}",
+        }
+
+
+def _parse_yaml_header(content: str) -> tuple[dict | None, str]:
+    match = re.match(r"^---\s*\n(.*?)\n---\s*\n", content, re.DOTALL)
+    if not match:
+        return None, content
+    try:
+        header = yaml.safe_load(match.group(1))
+    except yaml.YAMLError as e:
+        logger.warning(f"Failed to parse YAML header: {e}")
+        return None, content
+    body = content[match.end():]
+    return header, body
+
+
+def load_schedules_from_workspace(schedules_dir: Path) -> list[Schedule]:
+    schedules: list[Schedule] = []
+    if not schedules_dir.is_dir():
+        logger.warning(f"Schedules directory not found: {schedules_dir}")
+        return schedules
+
+    for task_dir in sorted(schedules_dir.iterdir()):
+        if not task_dir.is_dir():
+            continue
+        task_file = task_dir / "TASK.md"
+        if not task_file.exists():
+            continue
+
+        content = task_file.read_text()
+        header, body = _parse_yaml_header(content)
+        if header is None:
+            logger.warning(f"No valid YAML header in {task_file}, skipping")
+            continue
+
+        name = header.get("name")
+        cron = header.get("cron")
+        if not name or not cron:
+            logger.warning(f"Missing 'name' or 'cron' in {task_file} header, skipping")
+            continue
+
+        schedule = Schedule(name=str(name), cron=str(cron), task_content=body.strip())
+        schedules.append(schedule)
+        logger.info(f"Loaded schedule: {name} (cron: {cron})")
+
+    logger.info(f"Loaded {len(schedules)} schedule(s) from {schedules_dir}")
+    return schedules
