@@ -1,0 +1,254 @@
+from __future__ import annotations
+
+import json
+import textwrap
+from pathlib import Path
+
+import pytest
+from aiohttp import web
+
+from psi_agent.protocol import ChatCompletionChunk, DeltaMessage, StreamChoice
+from psi_agent.session.agent import SessionAgent
+from psi_agent.session.tools import load_tools_from_workspace
+
+
+async def _get_weather(city: str) -> str:
+    """Get weather for a city."""
+    return f"Weather in {city}: sunny, 22 C"
+
+
+def _sse_chunk(content: str = "", reasoning: str = "", finish: str | None = None) -> str:
+    delta: dict = {}
+    if content:
+        delta["content"] = content
+    if reasoning:
+        delta["reasoning_content"] = reasoning
+    chunk = {
+        "id": "mock",
+        "object": "chat.completion.chunk",
+        "created": 0,
+        "model": "test",
+        "choices": [{"index": 0, "delta": delta, "finish_reason": finish}],
+    }
+    return f"data: {json.dumps(chunk)}\n\n"
+
+
+class MockAIServer:
+    """Helper to create and cleanup a mock AI Unix socket server."""
+
+    def __init__(self, tmp_path: Path) -> None:
+        self.socket_path = tmp_path / "ai.sock"
+        self._runner: web.AppRunner | None = None
+        self._app: web.Application | None = None
+
+    async def start(self, handler) -> str:
+        self._app = web.Application()
+        self._app.router.add_post("/v1/chat/completions", handler)
+        self._runner = web.AppRunner(self._app)
+        await self._runner.setup()
+        site = web.UnixSite(self._runner, str(self.socket_path))
+        await site.start()
+        return str(self.socket_path)
+
+    async def cleanup(self) -> None:
+        if self._runner:
+            await self._runner.cleanup()
+
+
+@pytest.mark.anyio
+async def test_agent_simple_response(tmp_path: Path) -> None:
+    async def handler(request: web.Request) -> web.StreamResponse:
+        resp = web.StreamResponse(status=200, reason="OK", headers={"Content-Type": "text/event-stream"})
+        await resp.prepare(request)
+        await resp.write(_sse_chunk(content="Hello").encode())
+        await resp.write(_sse_chunk(content=" world", finish="stop").encode())
+        await resp.write(b"data: [DONE]\n\n")
+        return resp
+
+    mock_server = MockAIServer(tmp_path)
+    ai_socket = await mock_server.start(handler)
+    try:
+        agent = SessionAgent(ai_socket=ai_socket, tools={}, model="test")
+        user_msg = {"role": "user", "content": "hi"}
+        chunks = []
+        async for chunk in agent.run(user_msg):
+            chunks.append(chunk)
+
+        all_content = "".join(
+            c.choices[0].delta.content or ""
+            for c in chunks
+            if c.choices and c.choices[0].delta.content
+        )
+        assert "Hello world" in all_content
+    finally:
+        await mock_server.cleanup()
+
+
+@pytest.mark.anyio
+async def test_agent_with_tool_call(tmp_path: Path) -> None:
+    tools_dir = tmp_path / "tools"
+    tools_dir.mkdir()
+    (tools_dir / "get_weather.py").write_text(textwrap.dedent("""\
+        async def get_weather(city: str) -> str:
+            \"\"\"Get weather for a city.
+
+            Args:
+                city: The city name.
+            \"\"\"
+            return f"Weather in {city}: sunny, 22 C"
+    """))
+
+    tools = load_tools_from_workspace(tools_dir)
+
+    request_count = 0
+
+    async def handler(request: web.Request) -> web.StreamResponse:
+        nonlocal request_count
+        body = await request.json()
+        request_count += 1
+
+        resp = web.StreamResponse(status=200, reason="OK", headers={"Content-Type": "text/event-stream"})
+        await resp.prepare(request)
+
+        if request_count == 1:
+            tc_chunk = {
+                "id": "mock",
+                "object": "chat.completion.chunk",
+                "created": 0,
+                "model": "test",
+                "choices": [{
+                    "index": 0,
+                    "delta": {
+                        "tool_calls": [{
+                            "index": 0,
+                            "id": "call_1",
+                            "type": "function",
+                            "function": {"name": "get_weather", "arguments": '{"city": "Beijing"}'},
+                        }],
+                    },
+                    "finish_reason": None,
+                }],
+            }
+            await resp.write(f"data: {json.dumps(tc_chunk)}\n\n".encode())
+            tc_chunk2 = {
+                "id": "mock",
+                "object": "chat.completion.chunk",
+                "created": 0,
+                "model": "test",
+                "choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}],
+            }
+            await resp.write(f"data: {json.dumps(tc_chunk2)}\n\n".encode())
+        else:
+            await resp.write(_sse_chunk(content="The weather in Beijing is sunny, 22 C", finish="stop").encode())
+
+        await resp.write(b"data: [DONE]\n\n")
+        return resp
+
+    mock_server = MockAIServer(tmp_path)
+    ai_socket = await mock_server.start(handler)
+    try:
+        agent = SessionAgent(ai_socket=ai_socket, tools=tools, model="test")
+        agent.register_tool_func("get_weather", _get_weather)
+
+        user_msg = {"role": "user", "content": "What's the weather in Beijing?"}
+        chunks = []
+        async for chunk in agent.run(user_msg):
+            chunks.append(chunk)
+
+        reasoning = [
+            c.choices[0].delta.reasoning_content
+            for c in chunks
+            if c.choices and c.choices[0].delta.reasoning_content
+        ]
+        assert len(reasoning) > 0, f"No reasoning chunks, got {len(chunks)} total"
+        assert any("get_weather" in (r or "") for r in reasoning)
+
+        content = [
+            c.choices[0].delta.content
+            for c in chunks
+            if c.choices and c.choices[0].delta.content
+        ]
+        assert any("sunny" in (c or "") for c in content)
+
+        assert request_count >= 2
+    finally:
+        await mock_server.cleanup()
+
+
+@pytest.mark.anyio
+async def test_agent_pending_schedule_response(tmp_path: Path) -> None:
+    async def handler(request: web.Request) -> web.StreamResponse:
+        resp = web.StreamResponse(status=200, reason="OK", headers={"Content-Type": "text/event-stream"})
+        await resp.prepare(request)
+        await resp.write(_sse_chunk(content="Current response", finish="stop").encode())
+        await resp.write(b"data: [DONE]\n\n")
+        return resp
+
+    mock_server = MockAIServer(tmp_path)
+    ai_socket = await mock_server.start(handler)
+    try:
+        agent = SessionAgent(ai_socket=ai_socket, tools={}, model="test")
+        agent.set_pending_schedule_chunks([
+            ChatCompletionChunk(
+                choices=[StreamChoice(
+                    index=0,
+                    delta=DeltaMessage(reasoning_content="[Schedule triggered: daily report]"),
+                )],
+            ),
+            ChatCompletionChunk(
+                choices=[StreamChoice(
+                    index=0,
+                    delta=DeltaMessage(content="Schedule content here"),
+                )],
+            ),
+        ])
+
+        user_msg = {"role": "user", "content": "hi"}
+        chunks = []
+        async for chunk in agent.run(user_msg):
+            chunks.append(chunk)
+
+        reasoning = [
+            c.choices[0].delta.reasoning_content
+            for c in chunks
+            if c.choices and c.choices[0].delta.reasoning_content
+        ]
+        assert any("Schedule triggered" in (r or "") for r in reasoning)
+
+        content = [
+            c.choices[0].delta.content
+            for c in chunks
+            if c.choices and c.choices[0].delta.content
+        ]
+        assert any("Current response" in (c or "") for c in content)
+
+        # After first run, pending should be cleared
+        assert agent._pending_schedule_chunks == []
+    finally:
+        await mock_server.cleanup()
+
+
+@pytest.mark.anyio
+async def test_agent_history_accumulation(tmp_path: Path) -> None:
+    async def handler(request: web.Request) -> web.StreamResponse:
+        resp = web.StreamResponse(status=200, reason="OK", headers={"Content-Type": "text/event-stream"})
+        await resp.prepare(request)
+        await resp.write(_sse_chunk(content="OK", finish="stop").encode())
+        await resp.write(b"data: [DONE]\n\n")
+        return resp
+
+    mock_server = MockAIServer(tmp_path)
+    ai_socket = await mock_server.start(handler)
+    try:
+        agent = SessionAgent(ai_socket=ai_socket, tools={}, model="test")
+
+        async for _ in agent.run({"role": "user", "content": "first"}):
+            pass
+        # Should have at least: user message + assistant response
+        assert len(agent.history) >= 2
+
+        async for _ in agent.run({"role": "user", "content": "second"}):
+            pass
+        assert len(agent.history) >= 4
+    finally:
+        await mock_server.cleanup()
