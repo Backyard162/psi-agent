@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import socket
 from pathlib import Path
 
 import anyio
@@ -71,17 +72,18 @@ async def test_anthropic_thinking_conversion(tmp_path: Path) -> None:
 
     runner = web.AppRunner(mock_app)
     await runner.setup()
-    site = web.TCPSite(runner, "127.0.0.1", 0)
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.bind(("127.0.0.1", 0))
+    port = sock.getsockname()[1]
+    site = web.SockSite(runner, sock)
     await site.start()
-
-    host, port, *_ = site._server.sockets[0].getsockname()  # ty: ignore[unresolved-attribute]
 
     try:
         config = AnthropicMessages(
             session_socket=str(socket_path),
             model="claude-sonnet",
             api_key="sk-ant-test",
-            base_url=f"http://{host}:{port}/v1",
+            base_url=f"http://127.0.0.1:{port}/v1",
         )
 
         async with anyio.create_task_group() as tg:
@@ -152,17 +154,18 @@ async def test_anthropic_tool_use_conversion(tmp_path: Path) -> None:
 
     runner = web.AppRunner(mock_app)
     await runner.setup()
-    site = web.TCPSite(runner, "127.0.0.1", 0)
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.bind(("127.0.0.1", 0))
+    port = sock.getsockname()[1]
+    site = web.SockSite(runner, sock)
     await site.start()
-
-    host, port, *_ = site._server.sockets[0].getsockname()  # ty: ignore[unresolved-attribute]
 
     try:
         config = AnthropicMessages(
             session_socket=str(socket_path),
             model="claude-sonnet",
             api_key="sk-ant-test",
-            base_url=f"http://{host}:{port}/v1",
+            base_url=f"http://127.0.0.1:{port}/v1",
         )
 
         async with anyio.create_task_group() as tg:

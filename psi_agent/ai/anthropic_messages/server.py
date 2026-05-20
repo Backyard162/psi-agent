@@ -161,26 +161,28 @@ async def handle_chat_completions(request: web.Request) -> web.StreamResponse:
 
     try:
         use_ssl = base_url.startswith("https")
-        async with ClientSession(connector=TCPConnector(ssl=use_ssl)) as session:  # noqa: SIM117
-            async with session.post(upstream_url, json=request_body, headers=headers) as upstream_resp:
-                logger.info(f"Upstream response status: {upstream_resp.status}")
-                if upstream_resp.status != 200:
-                    error_text = await upstream_resp.text()
-                    logger.error(f"Upstream error: {error_text[:500]}")
-                    err_data = json.dumps(
-                        {
-                            "error": {
-                                "message": f"Upstream error: {error_text[:200]}",
-                                "type": "upstream_error",
-                                "code": str(upstream_resp.status),
-                            }
+        async with (
+            ClientSession(connector=TCPConnector(ssl=use_ssl)) as session,
+            session.post(upstream_url, json=request_body, headers=headers) as upstream_resp,
+        ):
+            logger.info(f"Upstream response status: {upstream_resp.status}")
+            if upstream_resp.status != 200:
+                error_text = await upstream_resp.text()
+                logger.error(f"Upstream error: {error_text[:500]}")
+                err_data = json.dumps(
+                    {
+                        "error": {
+                            "message": f"Upstream error: {error_text[:200]}",
+                            "type": "upstream_error",
+                            "code": str(upstream_resp.status),
                         }
-                    )
-                    await response.write(f"data: {err_data}\n\n".encode())
-                    await response.write(b"data: [DONE]\n\n")
-                    return response
+                    }
+                )
+                await response.write(f"data: {err_data}\n\n".encode())
+                await response.write(b"data: [DONE]\n\n")
+                return response
 
-                await _convert_anthropic_stream_to_openai_sse(response, upstream_resp.content)
+            await _convert_anthropic_stream_to_openai_sse(response, upstream_resp.content)
     except Exception as e:
         logger.error(f"Error forwarding to upstream: {e}")
         err_data = json.dumps(

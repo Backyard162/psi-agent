@@ -204,7 +204,7 @@ class SessionAgent:
         connector = UnixConnector(path=self.ai_socket)
         async with (
             ClientSession(connector=connector) as session,
-            session.post(  # noqa: SIM117
+            session.post(
                 "http://localhost/v1/chat/completions",
                 json=request_body,
             ) as resp,
