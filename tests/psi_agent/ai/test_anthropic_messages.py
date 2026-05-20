@@ -7,11 +7,11 @@ import anyio
 import pytest
 from aiohttp import ClientSession, UnixConnector, web
 
-from psi_agent.ai.anthropic_messages import AiAnthropicMessages
+from psi_agent.ai.anthropic_messages import AnthropicMessages
 
 
 def test_cli_dataclass() -> None:
-    config = AiAnthropicMessages(
+    config = AnthropicMessages(
         session_socket="/tmp/test.sock",
         model="claude-sonnet",
         api_key="sk-ant-test",
@@ -71,7 +71,7 @@ async def test_anthropic_thinking_conversion(tmp_path: Path) -> None:
     host, port, *_ = site._server.sockets[0].getsockname()
 
     try:
-        config = AiAnthropicMessages(
+        config = AnthropicMessages(
             session_socket=str(socket_path),
             model="claude-sonnet",
             api_key="sk-ant-test",
@@ -150,7 +150,7 @@ async def test_anthropic_tool_use_conversion(tmp_path: Path) -> None:
     host, port, *_ = site._server.sockets[0].getsockname()
 
     try:
-        config = AiAnthropicMessages(
+        config = AnthropicMessages(
             session_socket=str(socket_path),
             model="claude-sonnet",
             api_key="sk-ant-test",

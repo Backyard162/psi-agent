@@ -6,7 +6,7 @@ from .server import serve_openai_completions
 
 
 @dataclass
-class AiOpenAICompletions:
+class OpenAICompletions:
     """Start an OpenAI-compatible AI backend service.
 
     Proxies OpenAI Chat Completions requests, injecting the configured model and API key.

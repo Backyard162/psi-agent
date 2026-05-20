@@ -6,7 +6,7 @@ from .server import serve_anthropic_messages
 
 
 @dataclass
-class AiAnthropicMessages:
+class AnthropicMessages:
     """Start an Anthropic Messages to OpenAI compatible AI backend service.
 
     Converts OpenAI-format Chat Completions requests to Anthropic Messages API format,

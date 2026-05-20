@@ -7,11 +7,11 @@ import anyio
 import pytest
 from aiohttp import ClientSession, UnixConnector, web
 
-from psi_agent.ai.openai_completions import AiOpenAICompletions
+from psi_agent.ai.openai_completions import OpenAICompletions
 
 
 def test_cli_dataclass_defaults() -> None:
-    config = AiOpenAICompletions(
+    config = OpenAICompletions(
         session_socket="/tmp/test.sock",
         model="gpt-test",
         api_key="sk-test",
@@ -62,7 +62,7 @@ async def test_server_streaming_response(tmp_path: Path) -> None:
     host, port, *_ = site._server.sockets[0].getsockname()
 
     try:
-        config = AiOpenAICompletions(
+        config = OpenAICompletions(
             session_socket=str(socket_path),
             model="gpt-test",
             api_key="sk-test",
