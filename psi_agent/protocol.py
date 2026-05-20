@@ -42,6 +42,7 @@ class ToolFunction:
         type_hints = {}
         try:
             import typing
+
             type_hints = typing.get_type_hints(func)
         except Exception:
             pass
@@ -258,13 +259,15 @@ class ChatCompletionChunk:
                     finish_reason=c.get("finish_reason"),
                 )
             )
-        return [cls(
-            id=data.get("id", ""),
-            object=data.get("object", ""),
-            created=data.get("created", 0),
-            model=data.get("model", ""),
-            choices=choices,
-        )]
+        return [
+            cls(
+                id=data.get("id", ""),
+                object=data.get("object", ""),
+                created=data.get("created", 0),
+                model=data.get("model", ""),
+                choices=choices,
+            )
+        ]
 
 
 @dataclass

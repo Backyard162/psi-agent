@@ -75,9 +75,7 @@ async def test_agent_simple_response(tmp_path: Path) -> None:
             chunks.append(chunk)
 
         all_content = "".join(
-            c.choices[0].delta.content or ""
-            for c in chunks
-            if c.choices and c.choices[0].delta.content
+            c.choices[0].delta.content or "" for c in chunks if c.choices and c.choices[0].delta.content
         )
         assert "Hello world" in all_content
     finally:
@@ -88,7 +86,8 @@ async def test_agent_simple_response(tmp_path: Path) -> None:
 async def test_agent_with_tool_call(tmp_path: Path) -> None:
     tools_dir = tmp_path / "tools"
     tools_dir.mkdir()
-    (tools_dir / "get_weather.py").write_text(textwrap.dedent("""\
+    (tools_dir / "get_weather.py").write_text(
+        textwrap.dedent("""\
         async def get_weather(city: str) -> str:
             \"\"\"Get weather for a city.
 
@@ -96,7 +95,8 @@ async def test_agent_with_tool_call(tmp_path: Path) -> None:
                 city: The city name.
             \"\"\"
             return f"Weather in {city}: sunny, 22 C"
-    """))
+    """)
+    )
 
     tools = load_tools_from_workspace(tools_dir)
 
@@ -104,7 +104,7 @@ async def test_agent_with_tool_call(tmp_path: Path) -> None:
 
     async def handler(request: web.Request) -> web.StreamResponse:
         nonlocal request_count
-        body = await request.json()
+        await request.json()  # verify parsing succeeds
         request_count += 1
 
         resp = web.StreamResponse(status=200, reason="OK", headers={"Content-Type": "text/event-stream"})
@@ -116,18 +116,22 @@ async def test_agent_with_tool_call(tmp_path: Path) -> None:
                 "object": "chat.completion.chunk",
                 "created": 0,
                 "model": "test",
-                "choices": [{
-                    "index": 0,
-                    "delta": {
-                        "tool_calls": [{
-                            "index": 0,
-                            "id": "call_1",
-                            "type": "function",
-                            "function": {"name": "get_weather", "arguments": '{"city": "Beijing"}'},
-                        }],
-                    },
-                    "finish_reason": None,
-                }],
+                "choices": [
+                    {
+                        "index": 0,
+                        "delta": {
+                            "tool_calls": [
+                                {
+                                    "index": 0,
+                                    "id": "call_1",
+                                    "type": "function",
+                                    "function": {"name": "get_weather", "arguments": '{"city": "Beijing"}'},
+                                }
+                            ],
+                        },
+                        "finish_reason": None,
+                    }
+                ],
             }
             await resp.write(f"data: {json.dumps(tc_chunk)}\n\n".encode())
             tc_chunk2 = {
@@ -156,18 +160,12 @@ async def test_agent_with_tool_call(tmp_path: Path) -> None:
             chunks.append(chunk)
 
         reasoning = [
-            c.choices[0].delta.reasoning_content
-            for c in chunks
-            if c.choices and c.choices[0].delta.reasoning_content
+            c.choices[0].delta.reasoning_content for c in chunks if c.choices and c.choices[0].delta.reasoning_content
         ]
         assert len(reasoning) > 0, f"No reasoning chunks, got {len(chunks)} total"
         assert any("get_weather" in (r or "") for r in reasoning)
 
-        content = [
-            c.choices[0].delta.content
-            for c in chunks
-            if c.choices and c.choices[0].delta.content
-        ]
+        content = [c.choices[0].delta.content for c in chunks if c.choices and c.choices[0].delta.content]
         assert any("sunny" in (c or "") for c in content)
 
         assert request_count >= 2
@@ -188,20 +186,26 @@ async def test_agent_pending_schedule_response(tmp_path: Path) -> None:
     ai_socket = await mock_server.start(handler)
     try:
         agent = SessionAgent(ai_socket=ai_socket, tools={}, model="test")
-        agent.set_pending_schedule_chunks([
-            ChatCompletionChunk(
-                choices=[StreamChoice(
-                    index=0,
-                    delta=DeltaMessage(reasoning_content="[Schedule triggered: daily report]"),
-                )],
-            ),
-            ChatCompletionChunk(
-                choices=[StreamChoice(
-                    index=0,
-                    delta=DeltaMessage(content="Schedule content here"),
-                )],
-            ),
-        ])
+        agent.set_pending_schedule_chunks(
+            [
+                ChatCompletionChunk(
+                    choices=[
+                        StreamChoice(
+                            index=0,
+                            delta=DeltaMessage(reasoning_content="[Schedule triggered: daily report]"),
+                        )
+                    ],
+                ),
+                ChatCompletionChunk(
+                    choices=[
+                        StreamChoice(
+                            index=0,
+                            delta=DeltaMessage(content="Schedule content here"),
+                        )
+                    ],
+                ),
+            ]
+        )
 
         user_msg = {"role": "user", "content": "hi"}
         chunks = []
@@ -209,17 +213,11 @@ async def test_agent_pending_schedule_response(tmp_path: Path) -> None:
             chunks.append(chunk)
 
         reasoning = [
-            c.choices[0].delta.reasoning_content
-            for c in chunks
-            if c.choices and c.choices[0].delta.reasoning_content
+            c.choices[0].delta.reasoning_content for c in chunks if c.choices and c.choices[0].delta.reasoning_content
         ]
         assert any("Schedule triggered" in (r or "") for r in reasoning)
 
-        content = [
-            c.choices[0].delta.content
-            for c in chunks
-            if c.choices and c.choices[0].delta.content
-        ]
+        content = [c.choices[0].delta.content for c in chunks if c.choices and c.choices[0].delta.content]
         assert any("Current response" in (c or "") for c in content)
 
         # After first run, pending should be cleared

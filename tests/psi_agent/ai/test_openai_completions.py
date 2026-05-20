@@ -36,17 +36,21 @@ async def test_server_streaming_response(tmp_path: Path) -> None:
         )
         await resp.prepare(request)
 
-        chunk = json.dumps({
-            "id": "test",
-            "object": "chat.completion.chunk",
-            "created": 0,
-            "model": "gpt-test",
-            "choices": [{
-                "index": 0,
-                "delta": {"content": "Hello from AI"},
-                "finish_reason": "stop",
-            }],
-        })
+        chunk = json.dumps(
+            {
+                "id": "test",
+                "object": "chat.completion.chunk",
+                "created": 0,
+                "model": "gpt-test",
+                "choices": [
+                    {
+                        "index": 0,
+                        "delta": {"content": "Hello from AI"},
+                        "finish_reason": "stop",
+                    }
+                ],
+            }
+        )
         await resp.write(f"data: {chunk}\n\n".encode())
         await resp.write(b"data: [DONE]\n\n")
         return resp
@@ -80,9 +84,7 @@ async def test_server_streaming_response(tmp_path: Path) -> None:
                     "messages": [{"role": "user", "content": "hi"}],
                     "stream": True,
                 }
-                async with session.post(
-                    "http://localhost/v1/chat/completions", json=req_data
-                ) as resp:
+                async with session.post("http://localhost/v1/chat/completions", json=req_data) as resp:
                     assert resp.status == 200
                     chunks: list[str] = []
                     async for raw in resp.content:

@@ -116,11 +116,13 @@ class SessionAgent:
                     ordered_calls = [accumulated_tool_calls[i] for i in sorted(accumulated_tool_calls)]
 
                     # Add assistant message with tool_calls to history
-                    self.history.append({
-                        "role": "assistant",
-                        "content": None,
-                        "tool_calls": ordered_calls,
-                    })
+                    self.history.append(
+                        {
+                            "role": "assistant",
+                            "content": None,
+                            "tool_calls": ordered_calls,
+                        }
+                    )
 
                     # Execute each tool call
                     for tc in ordered_calls:
@@ -130,7 +132,7 @@ class SessionAgent:
 
                         try:
                             args = json.loads(func_args_str)
-                        except (json.JSONDecodeError, TypeError):
+                        except json.JSONDecodeError, TypeError:
                             args = {}
 
                         logger.info(f"Executing tool: {func_name}({args})")
@@ -138,12 +140,16 @@ class SessionAgent:
                         yield ChatCompletionChunk(
                             id="tool_call",
                             model=self.model,
-                            choices=[StreamChoice(
-                                index=0,
-                                delta=DeltaMessage(
-                                    reasoning_content=f"[Tool Call: {func_name}({json.dumps(args, ensure_ascii=False)})]"
-                                ),
-                            )],
+                            choices=[
+                                StreamChoice(
+                                    index=0,
+                                    delta=DeltaMessage(
+                                        reasoning_content=(
+                                            f"[Tool Call: {func_name}({json.dumps(args, ensure_ascii=False)})]"
+                                        ),
+                                    ),
+                                )
+                            ],
                         )
 
                         func = self._tool_funcs.get(func_name)
@@ -161,20 +167,22 @@ class SessionAgent:
                         yield ChatCompletionChunk(
                             id="tool_result",
                             model=self.model,
-                            choices=[StreamChoice(
-                                index=0,
-                                delta=DeltaMessage(
-                                    reasoning_content=f"[Tool Result: {str(result)[:500]}]"
-                                ),
-                            )],
+                            choices=[
+                                StreamChoice(
+                                    index=0,
+                                    delta=DeltaMessage(reasoning_content=f"[Tool Result: {str(result)[:500]}]"),
+                                )
+                            ],
                         )
 
-                        self.history.append({
-                            "role": "tool",
-                            "tool_call_id": tc.get("id", ""),
-                            "name": func_name,
-                            "content": str(result),
-                        })
+                        self.history.append(
+                            {
+                                "role": "tool",
+                                "tool_call_id": tc.get("id", ""),
+                                "name": func_name,
+                                "content": str(result),
+                            }
+                        )
 
                     break
 
@@ -183,65 +191,73 @@ class SessionAgent:
             yield ChatCompletionChunk(
                 id="max_rounds",
                 model=self.model,
-                choices=[StreamChoice(
-                    index=0,
-                    delta=DeltaMessage(content="[Max tool rounds reached]"),
-                    finish_reason="stop",
-                )],
+                choices=[
+                    StreamChoice(
+                        index=0,
+                        delta=DeltaMessage(content="[Max tool rounds reached]"),
+                        finish_reason="stop",
+                    )
+                ],
             )
 
     async def _stream_ai_request(self, request_body: dict) -> AsyncIterator[ChatCompletionChunk]:
         connector = UnixConnector(path=self.ai_socket)
-        async with ClientSession(connector=connector) as session:
-            async with session.post(
+        async with (
+            ClientSession(connector=connector) as session,
+            session.post(  # noqa: SIM117
                 "http://localhost/v1/chat/completions",
                 json=request_body,
-            ) as resp:
-                logger.info(f"AI response status: {resp.status}")
-                if resp.status != 200:
-                    error_text = await resp.text()
-                    logger.error(f"AI error: {error_text[:500]}")
-                    yield ChatCompletionChunk(
-                        id="error",
-                        model=self.model,
-                        choices=[StreamChoice(
+            ) as resp,
+        ):
+            logger.info(f"AI response status: {resp.status}")
+            if resp.status != 200:
+                error_text = await resp.text()
+                logger.error(f"AI error: {error_text[:500]}")
+                yield ChatCompletionChunk(
+                    id="error",
+                    model=self.model,
+                    choices=[
+                        StreamChoice(
                             index=0,
                             delta=DeltaMessage(content=f"[AI Error: {resp.status}]"),
                             finish_reason="stop",
-                        )],
-                    )
-                    return
-
-                async for raw_line in resp.content:
-                    line = raw_line.decode().strip()
-                    if not line or not line.startswith("data: "):
-                        continue
-                    data_str = line[6:]
-                    if data_str == "[DONE]":
-                        continue
-
-                    try:
-                        data = json.loads(data_str)
-                    except json.JSONDecodeError:
-                        logger.warning(f"Failed to parse SSE data: {data_str[:100]}")
-                        continue
-
-                    choices_data = data.get("choices", [])
-                    for c in choices_data:
-                        delta_data = c.get("delta", {})
-                        delta = DeltaMessage(
-                            content=delta_data.get("content"),
-                            role=delta_data.get("role"),
-                            reasoning_content=delta_data.get("reasoning_content"),
-                            tool_calls=delta_data.get("tool_calls"),
                         )
-                        yield ChatCompletionChunk(
-                            id=data.get("id", "chatcmpl-unknown"),
-                            model=data.get("model", ""),
-                            created=data.get("created", 0),
-                            choices=[StreamChoice(
+                    ],
+                )
+                return
+
+            async for raw_line in resp.content:
+                line = raw_line.decode().strip()
+                if not line or not line.startswith("data: "):
+                    continue
+                data_str = line[6:]
+                if data_str == "[DONE]":
+                    continue
+
+                try:
+                    data = json.loads(data_str)
+                except json.JSONDecodeError:
+                    logger.warning(f"Failed to parse SSE data: {data_str[:100]}")
+                    continue
+
+                choices_data = data.get("choices", [])
+                for c in choices_data:
+                    delta_data = c.get("delta", {})
+                    delta = DeltaMessage(
+                        content=delta_data.get("content"),
+                        role=delta_data.get("role"),
+                        reasoning_content=delta_data.get("reasoning_content"),
+                        tool_calls=delta_data.get("tool_calls"),
+                    )
+                    yield ChatCompletionChunk(
+                        id=data.get("id", "chatcmpl-unknown"),
+                        model=data.get("model", ""),
+                        created=data.get("created", 0),
+                        choices=[
+                            StreamChoice(
                                 index=c.get("index", 0),
                                 delta=delta,
                                 finish_reason=c.get("finish_reason"),
-                            )],
-                        )
+                            )
+                        ],
+                    )

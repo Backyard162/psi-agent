@@ -11,7 +11,7 @@ from loguru import logger
 
 from psi_agent.logging import setup_logging
 from psi_agent.session.agent import SessionAgent
-from psi_agent.session.scheduler import Schedule, load_schedules_from_workspace
+from psi_agent.session.scheduler import load_schedules_from_workspace
 from psi_agent.session.server import serve_session
 from psi_agent.session.tools import load_tools_from_workspace
 
@@ -61,7 +61,7 @@ class SessionConfig:
     async def run(self) -> None:
         setup_logging(verbose=self.verbose)
 
-        workspace_path = Path(self.workspace).resolve()
+        workspace_path = Path(self.workspace).resolve()  # noqa: ASYNC240
         logger.info(f"Loading workspace from {workspace_path}")
 
         tools = load_tools_from_workspace(workspace_path / "tools")
@@ -91,9 +91,7 @@ class SessionConfig:
                     continue
                 name = py_file.stem
                 try:
-                    spec = importlib.util.spec_from_file_location(
-                        f"psi_tool_{name}", str(py_file)
-                    )
+                    spec = importlib.util.spec_from_file_location(f"psi_tool_{name}", str(py_file))
                     if spec is None or spec.loader is None:
                         continue
                     module = importlib.util.module_from_spec(spec)
@@ -124,9 +122,7 @@ class SessionConfig:
                                 async for chunk in agent.run(msg):
                                     pending_chunks.append(chunk)
                                 agent.set_pending_schedule_chunks(pending_chunks)
-                                logger.info(
-                                    f"Schedule {schedule.name} response stored ({len(pending_chunks)} chunks)"
-                                )
+                                logger.info(f"Schedule {schedule.name} response stored ({len(pending_chunks)} chunks)")
                     except Exception as e:
                         logger.error(f"Error processing schedule {schedule.name}: {e}")
 

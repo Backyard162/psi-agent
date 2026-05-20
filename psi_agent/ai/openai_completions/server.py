@@ -16,10 +16,7 @@ async def serve_openai_completions(
     api_key: str,
     base_url: str,
 ) -> None:
-    logger.info(
-        f"Starting openai-completions AI service on {socket_path} "
-        f"(model={model}, base_url={base_url})"
-    )
+    logger.info(f"Starting openai-completions AI service on {socket_path} (model={model}, base_url={base_url})")
 
     app = web.Application()
     app["model"] = model
@@ -65,7 +62,7 @@ async def handle_chat_completions(request: web.Request) -> web.StreamResponse:
     }
 
     logger.info(f"Forwarding to upstream: {upstream_url}")
-    logger.debug(f"Upstream headers: Authorization=Bearer *** (api_key hidden)")
+    logger.debug("Upstream headers: Authorization=Bearer *** (api_key hidden)")
 
     response = web.StreamResponse(
         status=200,
@@ -80,21 +77,21 @@ async def handle_chat_completions(request: web.Request) -> web.StreamResponse:
 
     try:
         use_ssl = base_url.startswith("https")
-        async with ClientSession(connector=TCPConnector(ssl=use_ssl)) as session:
-            async with session.post(
-                upstream_url, json=body, headers=headers
-            ) as upstream_resp:
+        async with ClientSession(connector=TCPConnector(ssl=use_ssl)) as session:  # noqa: SIM117
+            async with session.post(upstream_url, json=body, headers=headers) as upstream_resp:
                 logger.info(f"Upstream response status: {upstream_resp.status}")
                 if upstream_resp.status != 200:
                     error_text = await upstream_resp.text()
                     logger.error(f"Upstream error: {error_text[:500]}")
-                    err_data = json.dumps({
-                        "error": {
-                            "message": f"Upstream error: {error_text[:200]}",
-                            "type": "upstream_error",
-                            "code": str(upstream_resp.status),
+                    err_data = json.dumps(
+                        {
+                            "error": {
+                                "message": f"Upstream error: {error_text[:200]}",
+                                "type": "upstream_error",
+                                "code": str(upstream_resp.status),
+                            }
                         }
-                    })
+                    )
                     await response.write(f"data: {err_data}\n\n".encode())
                     await response.write(b"data: [DONE]\n\n")
                     return response
@@ -106,13 +103,15 @@ async def handle_chat_completions(request: web.Request) -> web.StreamResponse:
                         await response.write((line + "\n\n").encode())
     except Exception as e:
         logger.error(f"Error forwarding to upstream: {e}")
-        err_data = json.dumps({
-            "error": {
-                "message": str(e),
-                "type": "upstream_connection",
-                "code": "502",
+        err_data = json.dumps(
+            {
+                "error": {
+                    "message": str(e),
+                    "type": "upstream_connection",
+                    "code": "502",
+                }
             }
-        })
+        )
         await response.write(f"data: {err_data}\n\n".encode())
         await response.write(b"data: [DONE]\n\n")
         return response

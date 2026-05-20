@@ -19,8 +19,8 @@ async def run_repl(session_socket: str) -> None:
 
             while True:
                 try:
-                    user_input = input("> ")
-                except (EOFError, KeyboardInterrupt):
+                    user_input = input("> ")  # noqa: ASYNC250
+                except EOFError, KeyboardInterrupt:
                     print("\nGoodbye!")
                     break
 

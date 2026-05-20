@@ -36,25 +36,31 @@ async def test_anthropic_thinking_conversion(tmp_path: Path) -> None:
         )
         await resp.prepare(request)
 
-        event_data = json.dumps({
-            "type": "content_block_start",
-            "index": 0,
-            "content_block": {"type": "thinking", "thinking": ""},
-        })
+        event_data = json.dumps(
+            {
+                "type": "content_block_start",
+                "index": 0,
+                "content_block": {"type": "thinking", "thinking": ""},
+            }
+        )
         await resp.write(f"event: content_block_start\ndata: {event_data}\n\n".encode())
 
-        event_data = json.dumps({
-            "type": "content_block_delta",
-            "index": 0,
-            "delta": {"type": "thinking_delta", "thinking": "Let me think about this..."},
-        })
+        event_data = json.dumps(
+            {
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "thinking_delta", "thinking": "Let me think about this..."},
+            }
+        )
         await resp.write(f"event: content_block_delta\ndata: {event_data}\n\n".encode())
 
-        event_data = json.dumps({
-            "type": "content_block_delta",
-            "index": 0,
-            "delta": {"type": "text_delta", "text": " The answer is 42."},
-        })
+        event_data = json.dumps(
+            {
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "text_delta", "text": " The answer is 42."},
+            }
+        )
         await resp.write(f"event: content_block_delta\ndata: {event_data}\n\n".encode())
 
         await resp.write(b"event: message_stop\ndata: {}\n\n")
@@ -89,9 +95,7 @@ async def test_anthropic_thinking_conversion(tmp_path: Path) -> None:
                     "messages": [{"role": "user", "content": "what is 6*7"}],
                     "stream": True,
                 }
-                async with session.post(
-                    "http://localhost/v1/chat/completions", json=req_data
-                ) as resp:
+                async with session.post("http://localhost/v1/chat/completions", json=req_data) as resp:
                     assert resp.status == 200
                     chunks: list[str] = []
                     async for raw in resp.content:
@@ -114,7 +118,7 @@ async def test_anthropic_tool_use_conversion(tmp_path: Path) -> None:
     socket_path = tmp_path / "ai.sock"
 
     async def mock_anthropic_handler(request: web.Request) -> web.StreamResponse:
-        body = await request.json()
+        _body = await request.json()  # verify parsing succeeds
         resp = web.StreamResponse(
             status=200,
             reason="OK",
@@ -122,18 +126,22 @@ async def test_anthropic_tool_use_conversion(tmp_path: Path) -> None:
         )
         await resp.prepare(request)
 
-        event_data = json.dumps({
-            "type": "content_block_start",
-            "index": 0,
-            "content_block": {"type": "tool_use", "id": "tool_1", "name": "bash", "input": {}},
-        })
+        event_data = json.dumps(
+            {
+                "type": "content_block_start",
+                "index": 0,
+                "content_block": {"type": "tool_use", "id": "tool_1", "name": "bash", "input": {}},
+            }
+        )
         await resp.write(f"event: content_block_start\ndata: {event_data}\n\n".encode())
 
-        event_data = json.dumps({
-            "type": "content_block_delta",
-            "index": 0,
-            "delta": {"type": "input_json_delta", "partial_json": '{"command": "ls"}'},
-        })
+        event_data = json.dumps(
+            {
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "input_json_delta", "partial_json": '{"command": "ls"}'},
+            }
+        )
         await resp.write(f"event: content_block_delta\ndata: {event_data}\n\n".encode())
 
         await resp.write(b"event: message_stop\ndata: {}\n\n")
@@ -168,9 +176,7 @@ async def test_anthropic_tool_use_conversion(tmp_path: Path) -> None:
                     "messages": [{"role": "user", "content": "run ls"}],
                     "stream": True,
                 }
-                async with session.post(
-                    "http://localhost/v1/chat/completions", json=req_data
-                ) as resp:
+                async with session.post("http://localhost/v1/chat/completions", json=req_data) as resp:
                     assert resp.status == 200
                     chunks: list[str] = []
                     async for raw in resp.content:

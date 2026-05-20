@@ -60,8 +60,7 @@ def test_tool_function_from_callable_with_default() -> None:
     assert tf.parameters["properties"]["limit"]["description"] == "Max results to return."
 
 
-async def _ping_tool() -> str:
-    ...
+async def _ping_tool() -> str: ...
 
 
 def test_tool_function_from_callable_no_docstring() -> None:
@@ -71,7 +70,11 @@ def test_tool_function_from_callable_no_docstring() -> None:
 
 
 def test_tool_def_to_dict() -> None:
-    tf = ToolFunction(name="test", description="A test tool", parameters={"type": "object", "properties": {}, "required": []})
+    tf = ToolFunction(
+        name="test",
+        description="A test tool",
+        parameters={"type": "object", "properties": {}, "required": []},
+    )
     td = ToolDef(function=tf)
     d = td.to_dict()
     assert d["type"] == "function"
@@ -91,7 +94,11 @@ def test_chat_completion_request_serialization() -> None:
 
 
 def test_chat_completion_request_with_tools() -> None:
-    tf = ToolFunction(name="bash", description="Run command", parameters={"type": "object", "properties": {}, "required": []})
+    tf = ToolFunction(
+        name="bash",
+        description="Run command",
+        parameters={"type": "object", "properties": {}, "required": []},
+    )
     req = ChatCompletionRequest(
         model="gpt-4",
         messages=[Message(role="user", content="run ls")],
@@ -142,12 +149,14 @@ def test_chat_completion_chunk_tool_calls_in_delta() -> None:
             StreamChoice(
                 index=0,
                 delta=DeltaMessage(
-                    tool_calls=[{
-                        "index": 0,
-                        "id": "call_1",
-                        "type": "function",
-                        "function": {"name": "bash", "arguments": '{"cmd": "ls"}'},
-                    }]
+                    tool_calls=[
+                        {
+                            "index": 0,
+                            "id": "call_1",
+                            "type": "function",
+                            "function": {"name": "bash", "arguments": '{"cmd": "ls"}'},
+                        }
+                    ]
                 ),
             )
         ],
@@ -169,11 +178,13 @@ def test_chat_completion_chunk_from_openai_chunk() -> None:
         "object": "chat.completion.chunk",
         "created": 123456,
         "model": "gpt-4",
-        "choices": [{
-            "index": 0,
-            "delta": {"content": "Hello"},
-            "finish_reason": None,
-        }],
+        "choices": [
+            {
+                "index": 0,
+                "delta": {"content": "Hello"},
+                "finish_reason": None,
+            }
+        ],
     }
     chunks = ChatCompletionChunk.from_openai_chunk(data)
     assert chunks is not None

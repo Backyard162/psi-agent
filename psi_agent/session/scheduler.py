@@ -46,7 +46,6 @@ class Schedule:
 
     def should_run_now(self) -> bool:
         now = time.time()
-        prev = self.get_prev_run()
         # Reset prev to get an accurate comparison
         self._cron_iter = croniter(self.cron, now)
         prev_time = self._cron_iter.get_prev()
@@ -73,7 +72,7 @@ def _parse_yaml_header(content: str) -> tuple[dict | None, str]:
     except yaml.YAMLError as e:
         logger.warning(f"Failed to parse YAML header: {e}")
         return None, content
-    body = content[match.end():]
+    body = content[match.end() :]
     return header, body
 
 

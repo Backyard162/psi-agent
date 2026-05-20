@@ -4,22 +4,21 @@ import textwrap
 import time
 from pathlib import Path
 
-import anyio
-import pytest
-
 from psi_agent.session.scheduler import Schedule, load_schedules_from_workspace
 
 
 def test_load_schedule_with_yaml_header(tmp_path: Path) -> None:
     schedules_dir = tmp_path / "schedules" / "daily-report"
     schedules_dir.mkdir(parents=True)
-    (schedules_dir / "TASK.md").write_text(textwrap.dedent("""\
+    (schedules_dir / "TASK.md").write_text(
+        textwrap.dedent("""\
         ---
         name: daily-report
         cron: "0 12 * * *"
         ---
         请生成项目进展日报。
-    """))
+    """)
+    )
 
     schedules = load_schedules_from_workspace(tmp_path / "schedules")
     assert len(schedules) == 1
@@ -42,7 +41,7 @@ def test_load_multiple_schedules(tmp_path: Path) -> None:
     for name in ["daily", "weekly"]:
         d = tmp_path / "schedules" / name
         d.mkdir(parents=True)
-        (d / "TASK.md").write_text(f"---\nname: {name}\ncron: \"0 12 * * *\"\n---\nTask: {name}")
+        (d / "TASK.md").write_text(f'---\nname: {name}\ncron: "0 12 * * *"\n---\nTask: {name}')
 
     schedules = load_schedules_from_workspace(tmp_path / "schedules")
     assert len(schedules) == 2
@@ -58,7 +57,7 @@ def test_load_schedules_missing_dir(tmp_path: Path) -> None:
 def test_load_schedule_missing_name(tmp_path: Path) -> None:
     schedules_dir = tmp_path / "schedules" / "bad"
     schedules_dir.mkdir(parents=True)
-    (schedules_dir / "TASK.md").write_text("---\ncron: \"0 12 * * *\"\n---\nTask")
+    (schedules_dir / "TASK.md").write_text('---\ncron: "0 12 * * *"\n---\nTask')
 
     schedules = load_schedules_from_workspace(tmp_path / "schedules")
     assert len(schedules) == 0

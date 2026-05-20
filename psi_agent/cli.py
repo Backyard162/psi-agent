@@ -18,8 +18,7 @@ AiGroup = Annotated[
 ]
 
 ChannelGroup = Annotated[
-    Annotated[ChannelRepl, conf.subcommand(name="repl")]
-    | Annotated[ChannelCli, conf.subcommand(name="cli")],
+    Annotated[ChannelRepl, conf.subcommand(name="repl")] | Annotated[ChannelCli, conf.subcommand(name="cli")],
     conf.subcommand(name="channel", description="User interface channels"),
 ]
 

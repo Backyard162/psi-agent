@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 
 import anyio
 from aiohttp import web
@@ -9,7 +8,6 @@ from loguru import logger
 
 from psi_agent.protocol import ChatCompletionChunk, DeltaMessage, ErrorResponse, StreamChoice
 from psi_agent.session.agent import SessionAgent
-from psi_agent.session.tools import ToolFunction
 
 SESSION_BUSY_ERROR = {
     "error": {
@@ -90,16 +88,21 @@ async def handle_chat_completions(request: web.Request) -> web.StreamResponse:
         try:
             async for chunk in agent.run(user_message):
                 await response.write(chunk.to_sse().encode())
-                logger.debug(f"Chunk sent: content={chunk.choices[0].delta.content!r}, reasoning={chunk.choices[0].delta.reasoning_content!r}")
+                logger.debug(
+                    f"Chunk sent: content={chunk.choices[0].delta.content!r}, "
+                    f"reasoning={chunk.choices[0].delta.reasoning_content!r}"
+                )
         except Exception as e:
             logger.error(f"Error in agent run: {e}")
             err_chunk = ChatCompletionChunk(
                 id="error",
-                choices=[StreamChoice(
-                    index=0,
-                    delta=DeltaMessage(content=f"[Session Error: {e}]"),
-                    finish_reason="stop",
-                )],
+                choices=[
+                    StreamChoice(
+                        index=0,
+                        delta=DeltaMessage(content=f"[Session Error: {e}]"),
+                        finish_reason="stop",
+                    )
+                ],
             )
             await response.write(err_chunk.to_sse().encode())
 

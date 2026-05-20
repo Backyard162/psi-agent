@@ -16,10 +16,7 @@ async def serve_anthropic_messages(
     api_key: str,
     base_url: str,
 ) -> None:
-    logger.info(
-        f"Starting anthropic-messages AI service on {socket_path} "
-        f"(model={model}, base_url={base_url})"
-    )
+    logger.info(f"Starting anthropic-messages AI service on {socket_path} (model={model}, base_url={base_url})")
 
     app = web.Application()
     app["model"] = model
@@ -45,13 +42,13 @@ def _convert_openai_tools_to_anthropic(tools: list[dict]) -> list[dict]:
     result: list[dict] = []
     for tool in tools:
         func = tool.get("function", {})
-        result.append({
-            "name": func.get("name", ""),
-            "description": func.get("description", ""),
-            "input_schema": func.get(
-                "parameters", {"type": "object", "properties": {}, "required": []}
-            ),
-        })
+        result.append(
+            {
+                "name": func.get("name", ""),
+                "description": func.get("description", ""),
+                "input_schema": func.get("parameters", {"type": "object", "properties": {}, "required": []}),
+            }
+        )
     return result
 
 
@@ -75,26 +72,32 @@ def _convert_openai_messages_to_anthropic(
                 func = tc.get("function", {})
                 try:
                     args = json.loads(func.get("arguments", "{}"))
-                except (json.JSONDecodeError, TypeError):
+                except json.JSONDecodeError, TypeError:
                     args = {}
-                tool_use_blocks.append({
-                    "type": "tool_use",
-                    "id": tc.get("id", ""),
-                    "name": func.get("name", ""),
-                    "input": args,
-                })
+                tool_use_blocks.append(
+                    {
+                        "type": "tool_use",
+                        "id": tc.get("id", ""),
+                        "name": func.get("name", ""),
+                        "input": args,
+                    }
+                )
             anthropic_messages.append({"role": "assistant", "content": tool_use_blocks})
             continue
 
         if role == "tool":
-            anthropic_messages.append({
-                "role": "user",
-                "content": [{
-                    "type": "tool_result",
-                    "tool_use_id": msg.get("tool_call_id", ""),
-                    "content": str(content) if content else "",
-                }],
-            })
+            anthropic_messages.append(
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": msg.get("tool_call_id", ""),
+                            "content": str(content) if content else "",
+                        }
+                    ],
+                }
+            )
             continue
 
         anthropic_messages.append({"role": role, "content": content})
@@ -157,21 +160,21 @@ async def handle_chat_completions(request: web.Request) -> web.StreamResponse:
 
     try:
         use_ssl = base_url.startswith("https")
-        async with ClientSession(connector=TCPConnector(ssl=use_ssl)) as session:
-            async with session.post(
-                upstream_url, json=request_body, headers=headers
-            ) as upstream_resp:
+        async with ClientSession(connector=TCPConnector(ssl=use_ssl)) as session:  # noqa: SIM117
+            async with session.post(upstream_url, json=request_body, headers=headers) as upstream_resp:
                 logger.info(f"Upstream response status: {upstream_resp.status}")
                 if upstream_resp.status != 200:
                     error_text = await upstream_resp.text()
                     logger.error(f"Upstream error: {error_text[:500]}")
-                    err_data = json.dumps({
-                        "error": {
-                            "message": f"Upstream error: {error_text[:200]}",
-                            "type": "upstream_error",
-                            "code": str(upstream_resp.status),
+                    err_data = json.dumps(
+                        {
+                            "error": {
+                                "message": f"Upstream error: {error_text[:200]}",
+                                "type": "upstream_error",
+                                "code": str(upstream_resp.status),
+                            }
                         }
-                    })
+                    )
                     await response.write(f"data: {err_data}\n\n".encode())
                     await response.write(b"data: [DONE]\n\n")
                     return response
@@ -179,13 +182,15 @@ async def handle_chat_completions(request: web.Request) -> web.StreamResponse:
                 await _convert_anthropic_stream_to_openai_sse(response, upstream_resp.content)
     except Exception as e:
         logger.error(f"Error forwarding to upstream: {e}")
-        err_data = json.dumps({
-            "error": {
-                "message": str(e),
-                "type": "upstream_connection",
-                "code": "502",
+        err_data = json.dumps(
+            {
+                "error": {
+                    "message": str(e),
+                    "type": "upstream_connection",
+                    "code": "502",
+                }
             }
-        })
+        )
         await response.write(f"data: {err_data}\n\n".encode())
         await response.write(b"data: [DONE]\n\n")
         return response
@@ -255,11 +260,13 @@ async def _convert_anthropic_stream_to_openai_sse(
                     "object": "chat.completion.chunk",
                     "created": 0,
                     "model": "",
-                    "choices": [{
-                        "index": 0,
-                        "delta": {"reasoning_content": thinking_text},
-                        "finish_reason": None,
-                    }],
+                    "choices": [
+                        {
+                            "index": 0,
+                            "delta": {"reasoning_content": thinking_text},
+                            "finish_reason": None,
+                        }
+                    ],
                 }
                 await response.write(f"data: {json.dumps(chunk)}\n\n".encode())
                 chunk_index += 1
@@ -271,11 +278,13 @@ async def _convert_anthropic_stream_to_openai_sse(
                     "object": "chat.completion.chunk",
                     "created": 0,
                     "model": "",
-                    "choices": [{
-                        "index": 0,
-                        "delta": {"content": text},
-                        "finish_reason": None,
-                    }],
+                    "choices": [
+                        {
+                            "index": 0,
+                            "delta": {"content": text},
+                            "finish_reason": None,
+                        }
+                    ],
                 }
                 await response.write(f"data: {json.dumps(chunk)}\n\n".encode())
                 chunk_index += 1
@@ -291,21 +300,25 @@ async def _convert_anthropic_stream_to_openai_sse(
                         "object": "chat.completion.chunk",
                         "created": 0,
                         "model": "",
-                        "choices": [{
-                            "index": 0,
-                            "delta": {
-                                "tool_calls": [{
-                                    "index": index,
-                                    "id": tc_copy.get("id", ""),
-                                    "type": "function",
-                                    "function": {
-                                        "name": tc_copy["function"]["name"],
-                                        "arguments": partial,
-                                    },
-                                }],
-                            },
-                            "finish_reason": None,
-                        }],
+                        "choices": [
+                            {
+                                "index": 0,
+                                "delta": {
+                                    "tool_calls": [
+                                        {
+                                            "index": index,
+                                            "id": tc_copy.get("id", ""),
+                                            "type": "function",
+                                            "function": {
+                                                "name": tc_copy["function"]["name"],
+                                                "arguments": partial,
+                                            },
+                                        }
+                                    ],
+                                },
+                                "finish_reason": None,
+                            }
+                        ],
                     }
                     await response.write(f"data: {json.dumps(chunk)}\n\n".encode())
                     chunk_index += 1
@@ -315,10 +328,12 @@ async def _convert_anthropic_stream_to_openai_sse(
         "object": "chat.completion.chunk",
         "created": 0,
         "model": "",
-        "choices": [{
-            "index": 0,
-            "delta": {},
-            "finish_reason": "stop",
-        }],
+        "choices": [
+            {
+                "index": 0,
+                "delta": {},
+                "finish_reason": "stop",
+            }
+        ],
     }
     await response.write(f"data: {json.dumps(final_chunk)}\n\n".encode())
