@@ -1,11 +1,6 @@
-# ruff: noqa: E402, ASYNC220, ASYNC251, F841
 from __future__ import annotations
 
-"""Session tool execution corner case tests."""
-
 import json
-import subprocess
-import time
 from pathlib import Path
 
 import pytest
@@ -14,7 +9,10 @@ from tests.integration.conftest import MockAIServer
 
 
 def _chunk(
-    content: str = "", reasoning: str = "", tool_calls: list | None = None, finish_reason: str | None = None
+    content: str = "",
+    reasoning: str = "",
+    tool_calls: list | None = None,
+    finish_reason: str | None = None,
 ) -> str:
     delta: dict = {}
     if content:
@@ -34,58 +32,24 @@ def _chunk(
     )
 
 
-async def _start_ai_server(tmp_path: Path, mock: MockAIServer) -> tuple[str, str, subprocess.Popen]:
-    """Start AI server and return (ai_socket_path, channel_socket_path)."""
-    import subprocess
+_T = {"index": 0, "id": "c1", "type": "function"}
 
-    base_url = await mock.start()
-    ai_socket = tmp_path / "ai.sock"
-    channel_socket = tmp_path / "channel.sock"
-    ai_proc = subprocess.Popen(
-        [
-            "uv",
-            "run",
-            "psi-agent",
-            "ai",
-            "openai-completions",
-            "--session-socket",
-            str(ai_socket),
-            "--model",
-            "test",
-            "--api-key",
-            "k",
-            "--base-url",
-            base_url,
-        ],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.PIPE,
-        text=True,
-    )
-    deadline = time.monotonic() + 10
-    while time.monotonic() < deadline:
-        if ai_socket.exists():
-            break
-        time.sleep(0.1)
-    return str(ai_socket), str(channel_socket), ai_proc
+
+def _tc(name: str, args: str) -> dict:
+    return {
+        "index": 0,
+        "id": "c1",
+        "type": "function",
+        "function": {"name": name, "arguments": args},
+    }
 
 
 @pytest.mark.anyio
 async def test_tool_throws_exception_caught(tmp_path: Path, mock_ai_server: MockAIServer) -> None:
-    """When a tool raises an exception, it should be caught and returned as error text."""
     mock_ai_server.set_responses(
         [
             _chunk(content="Let me try...", finish_reason=None),
-            _chunk(
-                tool_calls=[
-                    {
-                        "index": 0,
-                        "id": "c1",
-                        "type": "function",
-                        "function": {"name": "echo", "arguments": '{"message": "test"}'},
-                    }
-                ],
-                finish_reason="tool_calls",
-            ),
+            _chunk(tool_calls=[_tc("echo", '{"message": "test"}')], finish_reason="tool_calls"),
             _chunk(content="After tool", finish_reason="stop"),
         ]
     )
@@ -111,20 +75,9 @@ async def test_tool_throws_exception_caught(tmp_path: Path, mock_ai_server: Mock
 
 @pytest.mark.anyio
 async def test_tool_returns_int_converted_to_string(mock_ai_server: MockAIServer) -> None:
-    """Tool returning int should be converted to string."""
     mock_ai_server.set_responses(
         [
-            _chunk(
-                tool_calls=[
-                    {
-                        "index": 0,
-                        "id": "c1",
-                        "type": "function",
-                        "function": {"name": "echo", "arguments": '{"message":"x"}'},
-                    }
-                ],
-                finish_reason="tool_calls",
-            ),
+            _chunk(tool_calls=[_tc("echo", '{"message":"x"}')], finish_reason="tool_calls"),
             _chunk(content="ok", finish_reason="stop"),
         ]
     )
@@ -150,20 +103,9 @@ async def test_tool_returns_int_converted_to_string(mock_ai_server: MockAIServer
 
 @pytest.mark.anyio
 async def test_tool_returns_none_converted(mock_ai_server: MockAIServer) -> None:
-    """Tool returning None should become 'None'."""
     mock_ai_server.set_responses(
         [
-            _chunk(
-                tool_calls=[
-                    {
-                        "index": 0,
-                        "id": "c1",
-                        "type": "function",
-                        "function": {"name": "echo", "arguments": '{"message":"x"}'},
-                    }
-                ],
-                finish_reason="tool_calls",
-            ),
+            _chunk(tool_calls=[_tc("echo", '{"message":"x"}')], finish_reason="tool_calls"),
             _chunk(content="ok", finish_reason="stop"),
         ]
     )
@@ -189,13 +131,11 @@ async def test_tool_returns_none_converted(mock_ai_server: MockAIServer) -> None
 
 @pytest.mark.anyio
 async def test_tool_no_parameters(mock_ai_server: MockAIServer) -> None:
-    """Tool with no parameters should have empty properties/required."""
     mock_ai_server.set_responses(
         [
             _chunk(content="direct", finish_reason="stop"),
         ]
     )
-    base_url = await mock_ai_server.start()
 
     from psi_agent.protocol import ToolFunction
 
@@ -210,8 +150,6 @@ async def test_tool_no_parameters(mock_ai_server: MockAIServer) -> None:
 
 @pytest.mark.anyio
 async def test_tool_list_string_parameter(mock_ai_server: MockAIServer) -> None:
-    """Tool with list[str] parameter should fallback to 'string'."""
-
     from psi_agent.protocol import ToolFunction
 
     async def multi(commands: list[str]) -> str:
@@ -224,23 +162,9 @@ async def test_tool_list_string_parameter(mock_ai_server: MockAIServer) -> None:
 
 @pytest.mark.anyio
 async def test_max_tool_rounds_limit(mock_ai_server: MockAIServer) -> None:
-    """AI infinitely requesting tool_calls should be capped at 10 rounds."""
-    # Generate 15 identical tool_call responses to exhaust the limit
     responses: list[str] = []
     for _ in range(15):
-        responses.append(
-            _chunk(
-                tool_calls=[
-                    {
-                        "index": 0,
-                        "id": "c1",
-                        "type": "function",
-                        "function": {"name": "echo", "arguments": '{"message":"loop"}'},
-                    }
-                ],
-                finish_reason="tool_calls",
-            )
-        )
+        responses.append(_chunk(tool_calls=[_tc("echo", '{"message":"loop"}')], finish_reason="tool_calls"))
     mock_ai_server.set_responses(responses)
     base_url = await mock_ai_server.start()
 
@@ -261,7 +185,6 @@ async def test_max_tool_rounds_limit(mock_ai_server: MockAIServer) -> None:
     all_content = "".join(c.choices[0].delta.content or "" for c in chunks if c.choices)
     assert "Max tool rounds" in all_content
 
-    # Count tool call executions (should be exactly MAX_TOOL_ROUNDS = 10)
     tool_call_count = sum(
         1
         for c in chunks

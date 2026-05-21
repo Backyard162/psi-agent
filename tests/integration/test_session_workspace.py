@@ -1,13 +1,12 @@
-# ruff: noqa: E402, ASYNC220, ASYNC251
 from __future__ import annotations
-
-"""Workspace compatibility integration tests."""
 
 import json
 import textwrap
 from pathlib import Path
 
+import anyio
 import pytest
+from aiohttp import ClientSession, ClientTimeout, UnixConnector, web
 
 from tests.integration.conftest import MockAIServer
 
@@ -27,13 +26,30 @@ def _chunk(content: str = "", finish_reason: str | None = None) -> str:
     )
 
 
+async def _wait_socket(sock_path: str, timeout_sec: float = 15.0) -> bool:
+    deadline = anyio.current_time() + timeout_sec
+    ap = anyio.Path(sock_path)
+    while anyio.current_time() < deadline:
+        if await ap.exists():
+            await anyio.sleep(0.3)
+            return True
+        await anyio.sleep(0.1)
+    return False
+
+
+async def _stop_process(proc) -> None:
+    proc.terminate()
+    try:
+        await proc.wait()
+    except Exception:
+        proc.kill()
+
+
 @pytest.mark.anyio
 async def test_missing_tools_dir_graceful(tmp_path: Path, mock_ai_server: MockAIServer) -> None:
-    """Agent should work with no tools/ directory."""
     mock_ai_server.set_responses([_chunk(content="no tools", finish_reason="stop")])
     base_url = await mock_ai_server.start()
 
-    # Workspace without tools/
     ws = tmp_path / "ws"
     ws.mkdir()
     (ws / "systems").mkdir()
@@ -55,7 +71,6 @@ async def test_missing_tools_dir_graceful(tmp_path: Path, mock_ai_server: MockAI
 
 @pytest.mark.anyio
 async def test_missing_schedules_dir_graceful(tmp_path: Path) -> None:
-    """No schedules/ directory should result in empty schedule list."""
     from psi_agent.session.scheduler import load_schedules_from_workspace
 
     schedules = await load_schedules_from_workspace(tmp_path / "nonexistent")
@@ -64,14 +79,13 @@ async def test_missing_schedules_dir_graceful(tmp_path: Path) -> None:
 
 @pytest.mark.anyio
 async def test_missing_system_py(mock_ai_server: MockAIServer) -> None:
-    """Missing systems/system.py should result in system_prompt=None."""
     mock_ai_server.set_responses([_chunk(content="no system", finish_reason="stop")])
     base_url = await mock_ai_server.start()
 
     from psi_agent.session.agent import SessionAgent
 
     agent = SessionAgent(ai_socket=base_url, tools={}, model="test")
-    assert len(agent.history) == 0  # No system prompt injected
+    assert len(agent.history) == 0
 
     chunks = []
     async for c in agent.run({"role": "user", "content": "hi"}):
@@ -81,10 +95,7 @@ async def test_missing_system_py(mock_ai_server: MockAIServer) -> None:
 
 @pytest.mark.anyio
 async def test_system_prompt_builder_raises_exception_caught(tmp_path: Path) -> None:
-    """If system_prompt_builder() raises, it should be caught gracefully."""
-    import signal
-    import subprocess
-    import time
+    import socket as _sock
 
     ws = tmp_path / "ws"
     (ws / "tools").mkdir(parents=True)
@@ -93,14 +104,6 @@ async def test_system_prompt_builder_raises_exception_caught(tmp_path: Path) -> 
     (ws / "systems" / "system.py").write_text(
         "async def system_prompt_builder() -> str:\n    raise RuntimeError('bad')\n"
     )
-
-    ai_socket = tmp_path / "ai.sock"
-    channel_socket = tmp_path / "channel.sock"
-
-    # Mock AI
-    import socket as _sock
-
-    from aiohttp import web
 
     async def handler(request: web.Request) -> web.StreamResponse:
         resp = web.StreamResponse(status=200, reason="OK", headers={"Content-Type": "text/event-stream"})
@@ -111,89 +114,73 @@ async def test_system_prompt_builder_raises_exception_caught(tmp_path: Path) -> 
 
     app = web.Application()
     app.router.add_post("/v1/chat/completions", handler)
-    r = web.AppRunner(app)
-    await r.setup()
-    s = _sock.socket(_sock.AF_INET, _sock.SOCK_STREAM)
-    s.bind(("127.0.0.1", 0))
-    port = s.getsockname()[1]
-    site = web.SockSite(r, s)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    sock = _sock.socket(_sock.AF_INET, _sock.SOCK_STREAM)
+    sock.bind(("127.0.0.1", 0))
+    port = sock.getsockname()[1]
+    site = web.SockSite(runner, sock)
     await site.start()
 
+    ai_socket = str(tmp_path / "ai.sock")
+    channel_socket = str(tmp_path / "channel.sock")
+
+    proc = await anyio.open_process(
+        [
+            "uv",
+            "run",
+            "psi-agent",
+            "session",
+            "--workspace",
+            str(ws),
+            "--channel-socket",
+            channel_socket,
+            "--ai-socket",
+            ai_socket,
+            "--model",
+            "test",
+        ]
+    )
+    ai_proc = await anyio.open_process(
+        [
+            "uv",
+            "run",
+            "psi-agent",
+            "ai",
+            "openai-completions",
+            "--session-socket",
+            ai_socket,
+            "--model",
+            "test",
+            "--api-key",
+            "k",
+            "--base-url",
+            f"http://127.0.0.1:{port}/v1",
+        ]
+    )
+
     try:
-        proc = subprocess.Popen(
-            [
-                "uv",
-                "run",
-                "psi-agent",
-                "session",
-                "--workspace",
-                str(ws),
-                "--channel-socket",
-                str(channel_socket),
-                "--ai-socket",
-                str(ai_socket),
-                "--model",
-                "test",
-            ],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,
-            text=True,
-        )
-        ai_proc = subprocess.Popen(
-            [
-                "uv",
-                "run",
-                "psi-agent",
-                "ai",
-                "openai-completions",
-                "--session-socket",
-                str(ai_socket),
-                "--model",
-                "test",
-                "--api-key",
-                "k",
-                "--base-url",
-                f"http://127.0.0.1:{port}/v1",
-            ],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,
-            text=True,
-        )
+        assert await _wait_socket(ai_socket)
+        assert await _wait_socket(channel_socket)
 
-        try:
-            deadline = time.monotonic() + 15
-            while time.monotonic() < deadline:
-                if ai_socket.exists() and channel_socket.exists():
-                    time.sleep(0.5)
-                    break
-                time.sleep(0.1)
-
-            from aiohttp import ClientSession, ClientTimeout, UnixConnector
-
-            timeout = ClientTimeout(total=5)
-            connector = UnixConnector(path=str(channel_socket))
-            async with (
-                ClientSession(connector=connector, timeout=timeout) as session,
-                session.post(
-                    "http://localhost/v1/chat/completions",
-                    json={"model": "test", "messages": [{"role": "user", "content": "hi"}], "stream": True},
-                ) as resp,
-            ):
-                assert resp.status == 200, f"Session should start even with bad builder: {resp.status}"
-        finally:
-            for p in [proc, ai_proc]:
-                p.send_signal(signal.SIGTERM)
-                try:
-                    p.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    p.kill()
+        timeout = ClientTimeout(total=5)
+        connector = UnixConnector(path=channel_socket)
+        async with (
+            ClientSession(connector=connector, timeout=timeout) as session,
+            session.post(
+                "http://localhost/v1/chat/completions",
+                json={"model": "test", "messages": [{"role": "user", "content": "hi"}], "stream": True},
+            ) as resp,
+        ):
+            assert resp.status == 200, f"Session should start even with bad builder: {resp.status}"
     finally:
-        await r.cleanup()
+        await _stop_process(proc)
+        await _stop_process(ai_proc)
+        await runner.cleanup()
 
 
 @pytest.mark.anyio
 async def test_full_workspace_normal_conversation(tmp_path: Path, mock_ai_server: MockAIServer) -> None:
-    """Full workspace with tool should run a normal conversation."""
     ws = tmp_path / "ws"
     (ws / "tools").mkdir(parents=True)
     (ws / "tools" / "echo.py").write_text(

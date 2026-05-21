@@ -1,12 +1,6 @@
-# ruff: noqa: E402, ASYNC220, SIM117
 from __future__ import annotations
 
-"""Session concurrency and lock integration tests."""
-
 import json
-import signal
-import subprocess
-import time
 from pathlib import Path
 
 import anyio
@@ -20,9 +14,11 @@ async def _send_async(socket_path: str, message: str) -> int:
     body = {"model": "test", "messages": [{"role": "user", "content": message}], "stream": True}
     connector = UnixConnector(path=socket_path)
     timeout = ClientTimeout(total=5)
-    async with ClientSession(connector=connector, timeout=timeout) as session:
-        async with session.post("http://localhost/v1/chat/completions", json=body) as resp:
-            return resp.status
+    async with (
+        ClientSession(connector=connector, timeout=timeout) as session,
+        session.post("http://localhost/v1/chat/completions", json=body) as resp,
+    ):
+        return resp.status
 
 
 def _chunk(content: str = "", finish_reason: str | None = None) -> str:
@@ -40,28 +36,27 @@ def _chunk(content: str = "", finish_reason: str | None = None) -> str:
     )
 
 
-def _wait_for_socket(sock_path: Path, timeout_sec: float = 15.0) -> bool:
-    deadline = time.monotonic() + timeout_sec
-    while time.monotonic() < deadline:
-        if sock_path.exists():
-            time.sleep(0.3)
+async def _wait_socket(sock_path: str, timeout_sec: float = 15.0) -> bool:
+    deadline = anyio.current_time() + timeout_sec
+    ap = anyio.Path(sock_path)
+    while anyio.current_time() < deadline:
+        if await ap.exists():
+            await anyio.sleep(0.3)
             return True
-        time.sleep(0.1)
+        await anyio.sleep(0.1)
     return False
 
 
-def _killall(*procs: subprocess.Popen) -> None:
-    for p in procs:
-        p.send_signal(signal.SIGTERM)
-        try:
-            p.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            p.kill()
+async def _stop_process(proc) -> None:
+    proc.terminate()
+    try:
+        await proc.wait()
+    except Exception:
+        proc.kill()
 
 
 @pytest.mark.anyio
 async def test_second_request_gets_503_when_busy(tmp_path: Path) -> None:
-    """When session is processing a request, a second concurrent request gets 503."""
     import socket as _sock
 
     async def slow_handler(request: web.Request) -> web.StreamResponse:
@@ -82,10 +77,10 @@ async def test_second_request_gets_503_when_busy(tmp_path: Path) -> None:
     site = web.SockSite(runner, sock)
     await site.start()
 
-    ai_socket = tmp_path / "ai.sock"
-    channel_socket = tmp_path / "channel.sock"
+    ai_socket = str(tmp_path / "ai.sock")
+    channel_socket = str(tmp_path / "channel.sock")
 
-    ai_proc = subprocess.Popen(
+    ai_proc = await anyio.open_process(
         [
             "uv",
             "run",
@@ -93,19 +88,16 @@ async def test_second_request_gets_503_when_busy(tmp_path: Path) -> None:
             "ai",
             "openai-completions",
             "--session-socket",
-            str(ai_socket),
+            ai_socket,
             "--model",
             "test",
             "--api-key",
             "k",
             "--base-url",
             f"http://127.0.0.1:{port}/v1",
-        ],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.PIPE,
-        text=True,
+        ]
     )
-    ses_proc = subprocess.Popen(
+    ses_proc = await anyio.open_process(
         [
             "uv",
             "run",
@@ -114,32 +106,29 @@ async def test_second_request_gets_503_when_busy(tmp_path: Path) -> None:
             "--workspace",
             "examples/a-simple-bash-only-workspace",
             "--channel-socket",
-            str(channel_socket),
+            channel_socket,
             "--ai-socket",
-            str(ai_socket),
+            ai_socket,
             "--model",
             "test",
-        ],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.PIPE,
-        text=True,
+        ]
     )
 
     try:
-        assert _wait_for_socket(ai_socket)
-        assert _wait_for_socket(channel_socket)
+        assert await _wait_socket(ai_socket)
+        assert await _wait_socket(channel_socket)
 
         first_status = 0
         second_status = 0
 
         async def send_first() -> None:
             nonlocal first_status
-            first_status = await _send_async(str(channel_socket), "first")
+            first_status = await _send_async(channel_socket, "first")
 
         async def send_second() -> None:
             await anyio.sleep(0.3)
             nonlocal second_status
-            second_status = await _send_async(str(channel_socket), "second")
+            second_status = await _send_async(channel_socket, "second")
 
         async with anyio.create_task_group() as tg:
             tg.start_soon(send_first)
@@ -149,21 +138,21 @@ async def test_second_request_gets_503_when_busy(tmp_path: Path) -> None:
         assert second_status == 503, f"Expected 503, got {second_status}"
 
     finally:
-        _killall(ses_proc, ai_proc)
+        await _stop_process(ses_proc)
+        await _stop_process(ai_proc)
         await runner.cleanup()
 
 
 @pytest.mark.anyio
 async def test_third_request_succeeds_after_lock_released(tmp_path: Path) -> None:
-    """After first request completes, a subsequent request succeeds."""
     mock_srv = MockAIServer(tmp_path)
     mock_srv.set_responses([_chunk(content="ok", finish_reason="stop")])
     base_url = await mock_srv.start()
 
-    ai_socket = tmp_path / "ai.sock"
-    channel_socket = tmp_path / "channel.sock"
+    ai_socket = str(tmp_path / "ai.sock")
+    channel_socket = str(tmp_path / "channel.sock")
 
-    ai_proc = subprocess.Popen(
+    ai_proc = await anyio.open_process(
         [
             "uv",
             "run",
@@ -171,19 +160,16 @@ async def test_third_request_succeeds_after_lock_released(tmp_path: Path) -> Non
             "ai",
             "openai-completions",
             "--session-socket",
-            str(ai_socket),
+            ai_socket,
             "--model",
             "test",
             "--api-key",
             "k",
             "--base-url",
             base_url,
-        ],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.PIPE,
-        text=True,
+        ]
     )
-    ses_proc = subprocess.Popen(
+    ses_proc = await anyio.open_process(
         [
             "uv",
             "run",
@@ -192,34 +178,31 @@ async def test_third_request_succeeds_after_lock_released(tmp_path: Path) -> Non
             "--workspace",
             "examples/a-simple-bash-only-workspace",
             "--channel-socket",
-            str(channel_socket),
+            channel_socket,
             "--ai-socket",
-            str(ai_socket),
+            ai_socket,
             "--model",
             "test",
-        ],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.PIPE,
-        text=True,
+        ]
     )
 
     try:
-        assert _wait_for_socket(ai_socket)
-        assert _wait_for_socket(channel_socket)
+        assert await _wait_socket(ai_socket)
+        assert await _wait_socket(channel_socket)
 
-        s1 = await _send_async(str(channel_socket), "first")
+        s1 = await _send_async(channel_socket, "first")
         await anyio.sleep(0.3)
-        s2 = await _send_async(str(channel_socket), "second")
+        s2 = await _send_async(channel_socket, "second")
         assert s1 == 200
         assert s2 == 200
     finally:
-        _killall(ses_proc, ai_proc)
+        await _stop_process(ses_proc)
+        await _stop_process(ai_proc)
         await mock_srv.cleanup()
 
 
 @pytest.mark.anyio
 async def test_history_accumulation_across_requests(tmp_path: Path, mock_ai_server: MockAIServer) -> None:
-    """Session should accumulate history across multiple channel requests."""
     mock_ai_server.set_responses(
         [
             _chunk(content="first reply", finish_reason="stop"),
@@ -228,10 +211,10 @@ async def test_history_accumulation_across_requests(tmp_path: Path, mock_ai_serv
     )
     base_url = await mock_ai_server.start()
 
-    ai_socket = tmp_path / "ai.sock"
-    channel_socket = tmp_path / "channel.sock"
+    ai_socket = str(tmp_path / "ai.sock")
+    channel_socket = str(tmp_path / "channel.sock")
 
-    ai_proc = subprocess.Popen(
+    ai_proc = await anyio.open_process(
         [
             "uv",
             "run",
@@ -239,19 +222,16 @@ async def test_history_accumulation_across_requests(tmp_path: Path, mock_ai_serv
             "ai",
             "openai-completions",
             "--session-socket",
-            str(ai_socket),
+            ai_socket,
             "--model",
             "test",
             "--api-key",
             "k",
             "--base-url",
             base_url,
-        ],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.PIPE,
-        text=True,
+        ]
     )
-    ses_proc = subprocess.Popen(
+    ses_proc = await anyio.open_process(
         [
             "uv",
             "run",
@@ -260,31 +240,28 @@ async def test_history_accumulation_across_requests(tmp_path: Path, mock_ai_serv
             "--workspace",
             "examples/a-simple-bash-only-workspace",
             "--channel-socket",
-            str(channel_socket),
+            channel_socket,
             "--ai-socket",
-            str(ai_socket),
+            ai_socket,
             "--model",
             "test",
-        ],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.PIPE,
-        text=True,
+        ]
     )
 
     try:
-        assert _wait_for_socket(ai_socket)
-        assert _wait_for_socket(channel_socket)
+        assert await _wait_socket(ai_socket)
+        assert await _wait_socket(channel_socket)
 
-        s1 = await _send_async(str(channel_socket), "first message")
+        s1 = await _send_async(channel_socket, "first message")
         await anyio.sleep(0.5)
-        s2 = await _send_async(str(channel_socket), "second message")
+        s2 = await _send_async(channel_socket, "second message")
         assert s1 == 200
         assert s2 == 200
 
         assert len(mock_ai_server.request_bodies) >= 1, f"Got {len(mock_ai_server.request_bodies)} request(s)"
-        # Second round of messages confirms the session is still alive
         if len(mock_ai_server.request_bodies) >= 2:
             assert len(mock_ai_server.request_bodies[1]["messages"]) > len(mock_ai_server.request_bodies[0]["messages"])
     finally:
-        _killall(ses_proc, ai_proc)
+        await _stop_process(ses_proc)
+        await _stop_process(ai_proc)
         await mock_ai_server.cleanup()

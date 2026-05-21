@@ -1,15 +1,11 @@
-# ruff: noqa: E402, E501, ASYNC220, ASYNC240, ASYNC251, SIM117
 from __future__ import annotations
 
-"""AI layer error handling integration tests."""
-
 import json
-import signal
-import subprocess
-import time
 from pathlib import Path
 
+import anyio
 import pytest
+from aiohttp import ClientSession, ClientTimeout, UnixConnector, web
 
 from tests.integration.conftest import MockAIServer, read_sse
 
@@ -29,13 +25,32 @@ def _chunk(content: str = "", finish_reason: str | None = None) -> str:
     )
 
 
-def _start_ai_server(
-    tmp_path: Path, mock: MockAIServer, socket_name: str = "ai.sock"
-) -> tuple[str, str, subprocess.Popen]:
-    """Start AI server subprocess and return (socket_path, base_url)."""
-    base_url = mock.base_url
-    socket_path = tmp_path / socket_name
-    proc = subprocess.Popen(
+async def _wait_socket(sock_path: str, timeout_sec: float = 10.0) -> bool:
+    deadline = anyio.current_time() + timeout_sec
+    ap = anyio.Path(sock_path)
+    while anyio.current_time() < deadline:
+        if await ap.exists():
+            await anyio.sleep(0.3)
+            return True
+        await anyio.sleep(0.1)
+    return False
+
+
+async def _stop_process(proc) -> None:
+    proc.terminate()
+    try:
+        await proc.wait()
+    except Exception:
+        proc.kill()
+
+
+@pytest.mark.anyio
+async def test_simple_streaming_response(tmp_path: Path, mock_ai_server: MockAIServer) -> None:
+    mock_ai_server.set_responses([_chunk(content="streaming works", finish_reason="stop")])
+    base_url = await mock_ai_server.start()
+
+    socket_path = str(tmp_path / "ai.sock")
+    ai_proc = await anyio.open_process(
         [
             "uv",
             "run",
@@ -43,73 +58,68 @@ def _start_ai_server(
             "ai",
             "openai-completions",
             "--session-socket",
-            str(socket_path),
+            socket_path,
             "--model",
             "test",
             "--api-key",
             "k",
             "--base-url",
             base_url,
-        ],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.PIPE,
-        text=True,
+        ]
     )
-    deadline = time.monotonic() + 10
-    while time.monotonic() < deadline:
-        if socket_path.exists():
-            time.sleep(0.2)
-            break
-        time.sleep(0.1)
-    return str(socket_path), base_url, proc
 
-
-@pytest.mark.anyio
-async def test_simple_streaming_response(tmp_path: Path, mock_ai_server: MockAIServer) -> None:
-    """Basic streaming: start AI server, send request, verify SSE chunks arrive."""
-    mock_ai_server.set_responses([_chunk(content="streaming works", finish_reason="stop")])
-    await mock_ai_server.start()
-    socket_path, _, proc = _start_ai_server(tmp_path, mock_ai_server)
     try:
+        assert await _wait_socket(socket_path)
         chunks = await read_sse(socket_path, "hello")
         assert len(chunks) > 0
         content = "".join(c.get("choices", [{}])[0].get("delta", {}).get("content", "") for c in chunks)
         assert len(content) > 0
     finally:
-        proc.send_signal(signal.SIGTERM)
-        try:
-            proc.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            proc.kill()
+        await _stop_process(ai_proc)
 
 
 @pytest.mark.anyio
 async def test_non_json_body_returns_400(tmp_path: Path, mock_ai_server: MockAIServer) -> None:
-    """Non-JSON body should return 400 error."""
+    mock_ai_server.set_responses([_chunk(content="ok", finish_reason="stop")])
     await mock_ai_server.start()
-    socket_path, _, proc = _start_ai_server(tmp_path, mock_ai_server)
-    try:
-        from aiohttp import ClientSession, ClientTimeout, UnixConnector
 
+    socket_path = str(tmp_path / "ai.sock")
+    ai_proc = await anyio.open_process(
+        [
+            "uv",
+            "run",
+            "psi-agent",
+            "ai",
+            "openai-completions",
+            "--session-socket",
+            socket_path,
+            "--model",
+            "test",
+            "--api-key",
+            "k",
+            "--base-url",
+            mock_ai_server.base_url,
+        ]
+    )
+
+    try:
+        assert await _wait_socket(socket_path)
         connector = UnixConnector(path=socket_path)
         timeout = ClientTimeout(total=5)
-        async with ClientSession(connector=connector, timeout=timeout) as s:
-            async with s.post("http://localhost/v1/chat/completions", data="not json") as resp:
-                body = await resp.text()
-                assert resp.status >= 400 or "error" in body.lower()
+        async with (
+            ClientSession(connector=connector, timeout=timeout) as s,
+            s.post("http://localhost/v1/chat/completions", data="not json") as resp,
+        ):
+            body = await resp.text()
+            assert resp.status >= 400 or "error" in body.lower()
     finally:
-        proc.send_signal(signal.SIGTERM)
-        try:
-            proc.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            proc.kill()
+        await _stop_process(ai_proc)
 
 
 @pytest.mark.anyio
 async def test_upstream_connection_refused(tmp_path: Path) -> None:
-    """When upstream is unreachable, AI server should return 502 error via SSE."""
     socket_path = str(tmp_path / "ai.sock")
-    proc = subprocess.Popen(
+    proc = await anyio.open_process(
         [
             "uv",
             "run",
@@ -124,54 +134,54 @@ async def test_upstream_connection_refused(tmp_path: Path) -> None:
             "k",
             "--base-url",
             "http://127.0.0.1:19999/v1",
-        ],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.PIPE,
-        text=True,
+        ]
     )
+
     try:
-        # Wait for socket
-        deadline = time.monotonic() + 10
-        while time.monotonic() < deadline:
-            if Path(socket_path).exists():
-                time.sleep(0.2)
-                break
-            time.sleep(0.1)
+        assert await _wait_socket(socket_path)
         chunks = await read_sse(socket_path, "hello")
         all_text = "".join(json.dumps(c) for c in chunks)
         assert "error" in all_text.lower()
     finally:
-        proc.send_signal(signal.SIGTERM)
-        try:
-            proc.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            proc.kill()
+        await _stop_process(proc)
 
 
 @pytest.mark.anyio
 async def test_upstream_sse_disconnects_mid_stream(tmp_path: Path, mock_ai_server: MockAIServer) -> None:
-    """When upstream SSE stream ends without [DONE], server should not hang."""
     mock_ai_server.set_responses([_chunk(content="partial")])
     await mock_ai_server.start()
-    socket_path, _, proc = _start_ai_server(tmp_path, mock_ai_server)
+
+    socket_path = str(tmp_path / "ai.sock")
+    ai_proc = await anyio.open_process(
+        [
+            "uv",
+            "run",
+            "psi-agent",
+            "ai",
+            "openai-completions",
+            "--session-socket",
+            socket_path,
+            "--model",
+            "test",
+            "--api-key",
+            "k",
+            "--base-url",
+            mock_ai_server.base_url,
+        ]
+    )
+
     try:
+        assert await _wait_socket(socket_path)
         chunks = await read_sse(socket_path, "hello")
         assert len(chunks) >= 1
         assert any("partial" in json.dumps(c) for c in chunks)
     finally:
-        proc.send_signal(signal.SIGTERM)
-        try:
-            proc.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            proc.kill()
+        await _stop_process(ai_proc)
 
 
 @pytest.mark.anyio
 async def test_upstream_401_tunnelled(tmp_path: Path) -> None:
-    """When upstream returns 401, error should be passed through."""
     import socket as _sock
-
-    from aiohttp import web
 
     async def handler(request: web.Request) -> web.StreamResponse:
         return web.json_response({"error": {"message": "Unauthorized", "type": "auth", "code": "401"}}, status=401)
@@ -187,7 +197,7 @@ async def test_upstream_401_tunnelled(tmp_path: Path) -> None:
     await site.start()
 
     socket_path = str(tmp_path / "ai.sock")
-    proc = subprocess.Popen(
+    proc = await anyio.open_process(
         [
             "uv",
             "run",
@@ -202,38 +212,26 @@ async def test_upstream_401_tunnelled(tmp_path: Path) -> None:
             "k",
             "--base-url",
             f"http://127.0.0.1:{port}/v1",
-        ],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.PIPE,
-        text=True,
+        ]
     )
+
     try:
-        deadline = time.monotonic() + 10
-        while time.monotonic() < deadline:
-            if Path(socket_path).exists():
-                time.sleep(0.2)
-                break
-            time.sleep(0.1)
+        assert await _wait_socket(socket_path)
         chunks = await read_sse(socket_path, "hello")
         all_text = "".join(json.dumps(c) for c in chunks)
         assert "error" in all_text.lower()
     finally:
-        proc.send_signal(signal.SIGTERM)
-        try:
-            proc.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            proc.kill()
+        await _stop_process(proc)
         await runner.cleanup()
 
 
 @pytest.mark.anyio
 async def test_anthropic_empty_content_blocks(tmp_path: Path, mock_ai_server: MockAIServer) -> None:
-    """Anthropic layer should handle empty content blocks gracefully."""
     mock_ai_server.set_responses([_chunk(content="stop-only", finish_reason="stop")])
     await mock_ai_server.start()
-    # Start Anthropic AI server
+
     socket_path = str(tmp_path / "ai_anthro.sock")
-    proc = subprocess.Popen(
+    proc = await anyio.open_process(
         [
             "uv",
             "run",
@@ -248,50 +246,40 @@ async def test_anthropic_empty_content_blocks(tmp_path: Path, mock_ai_server: Mo
             "k",
             "--base-url",
             mock_ai_server.base_url,
-        ],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.PIPE,
-        text=True,
+        ]
     )
+
     try:
-        deadline = time.monotonic() + 10
-        while time.monotonic() < deadline:
-            if Path(socket_path).exists():
-                time.sleep(0.2)
-                break
-            time.sleep(0.1)
+        assert await _wait_socket(socket_path)
         chunks = await read_sse(socket_path, "hello")
         assert len(chunks) >= 1
     finally:
-        proc.send_signal(signal.SIGTERM)
-        try:
-            proc.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            proc.kill()
+        await _stop_process(proc)
 
 
 @pytest.mark.anyio
 async def test_anthropic_multi_tool_use_blocks(tmp_path: Path) -> None:
-    """Anthropic layer should correctly handle multiple tool_use blocks."""
     import socket as _sock
-
-    from aiohttp import web
 
     async def handler(request: web.Request) -> web.StreamResponse:
         resp = web.StreamResponse(status=200, reason="OK", headers={"Content-Type": "text/event-stream"})
         await resp.prepare(request)
         await resp.write(
-            b'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"t1","name":"bash","input":{}}}\n\n'
+            b'event: content_block_start\ndata: {"type":"content_block_start","index":0,'
+            b'"content_block":{"type":"tool_use","id":"t1","name":"bash","input":{}}}\n\n'
         )
         await resp.write(
-            b'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\\"cmd\\":\\"ls\\"}"}}\n\n'
+            b'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,'
+            b'"delta":{"type":"input_json_delta","partial_json":"{\\"cmd\\":\\"ls\\"}"}}\n\n'
         )
         await resp.write(b'event: content_block_stop\ndata: {"type":"content_block_stop","index":0}\n\n')
         await resp.write(
-            b'event: content_block_start\ndata: {"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"t2","name":"read_file","input":{}}}\n\n'
+            b'event: content_block_start\ndata: {"type":"content_block_start","index":1,'
+            b'"content_block":{"type":"tool_use","id":"t2","name":"read_file","input":{}}}\n\n'
         )
         await resp.write(
-            b'event: content_block_delta\ndata: {"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\\"path\\":\\"/tmp\\"}"}}\n\n'
+            b'event: content_block_delta\ndata: {"type":"content_block_delta","index":1,'
+            b'"delta":{"type":"input_json_delta","partial_json":"{\\"path\\":\\"/tmp\\"}"}}\n\n'
         )
         await resp.write(b'event: content_block_stop\ndata: {"type":"content_block_stop","index":1}\n\n')
         await resp.write(b"event: message_stop\ndata: {}\n\n")
@@ -308,7 +296,7 @@ async def test_anthropic_multi_tool_use_blocks(tmp_path: Path) -> None:
     await site.start()
 
     socket_path = str(tmp_path / "ai_anthro.sock")
-    proc = subprocess.Popen(
+    proc = await anyio.open_process(
         [
             "uv",
             "run",
@@ -323,26 +311,13 @@ async def test_anthropic_multi_tool_use_blocks(tmp_path: Path) -> None:
             "k",
             "--base-url",
             f"http://127.0.0.1:{port}/v1",
-        ],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.PIPE,
-        text=True,
+        ]
     )
+
     try:
-        deadline = time.monotonic() + 10
-        while time.monotonic() < deadline:
-            if Path(socket_path).exists():
-                time.sleep(0.2)
-                break
-            time.sleep(0.1)
+        assert await _wait_socket(socket_path)
         chunks = await read_sse(socket_path, "run tools")
-        # Verify we got a response (the conversion may not produce tool_calls without
-        # content_block_stop handling, but it shouldn't crash)
         assert len(chunks) > 0
     finally:
-        proc.send_signal(signal.SIGTERM)
-        try:
-            proc.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            proc.kill()
+        await _stop_process(proc)
         await runner.cleanup()
