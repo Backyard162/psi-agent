@@ -1,7 +1,4 @@
-# ruff: noqa: E402, E501, ASYNC220, ASYNC221, ASYNC240, ASYNC251, SIM117, F841, F401
 from __future__ import annotations
-
-"""Shared fixtures for integration tests."""
 
 import json
 import signal

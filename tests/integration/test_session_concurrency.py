@@ -1,4 +1,4 @@
-# ruff: noqa: E402, E501, ASYNC220, ASYNC221, ASYNC240, ASYNC251, SIM117, F841, F401
+# ruff: noqa: E402, ASYNC220, SIM117
 from __future__ import annotations
 
 """Session concurrency and lock integration tests."""

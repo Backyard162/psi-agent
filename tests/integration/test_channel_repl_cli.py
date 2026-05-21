@@ -1,14 +1,13 @@
 from __future__ import annotations
 
-"""Channel SSE parsing integration tests — tests the Python API behind CLI."""
-
 import json
 import socket as _sock
 
+import anyio
 import pytest
 from aiohttp import ClientSession, ClientTimeout, web
 
-from tests.integration.conftest import MockAIServer, read_sse  # noqa: E402
+from tests.integration.conftest import MockAIServer, read_sse
 
 
 def _chunk(content: str = "", reasoning: str = "", finish_reason: str | None = None) -> str:
@@ -29,7 +28,6 @@ def _chunk(content: str = "", reasoning: str = "", finish_reason: str | None = N
 
 
 async def _read_tcp_sse(base_url: str, message: str = "hello") -> list[dict]:
-    """Read SSE from a TCP server."""
     chunks: list[dict] = []
     body = {"model": "test", "messages": [{"role": "user", "content": message}], "stream": True}
     timeout = ClientTimeout(total=10)
@@ -52,20 +50,35 @@ async def _read_tcp_sse(base_url: str, message: str = "hello") -> list[dict]:
     return chunks
 
 
+async def _wait_for_socket(sock_path: str, timeout_sec: float = 15.0) -> bool:
+    deadline = anyio.current_time() + timeout_sec
+    sock_anyio = anyio.Path(sock_path)
+    while anyio.current_time() < deadline:
+        if await sock_anyio.exists():
+            await anyio.sleep(0.3)
+            return True
+        await anyio.sleep(0.1)
+    return False
+
+
+async def _stop_process(proc) -> None:
+    proc.terminate()
+    try:
+        await proc.wait()
+    except Exception:
+        proc.kill()
+
+
 @pytest.mark.anyio
 async def test_channel_receives_content_from_session(tmp_path, mock_ai_server: MockAIServer) -> None:
     """Channel should receive streaming content from session via SSE."""
     mock_ai_server.set_responses([_chunk(content="Hello from session", finish_reason="stop")])
     base_url = await mock_ai_server.start()
 
-    import signal
-    import subprocess
-    import time
-
     ai_socket = str(tmp_path / "ai.sock")
     channel_socket = str(tmp_path / "channel.sock")
 
-    ai_proc = subprocess.Popen(
+    ai_proc = await anyio.open_process(
         [
             "uv",
             "run",
@@ -81,11 +94,8 @@ async def test_channel_receives_content_from_session(tmp_path, mock_ai_server: M
             "--base-url",
             base_url,
         ],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.PIPE,
-        text=True,
     )
-    ses_proc = subprocess.Popen(
+    ses_proc = await anyio.open_process(
         [
             "uv",
             "run",
@@ -100,32 +110,18 @@ async def test_channel_receives_content_from_session(tmp_path, mock_ai_server: M
             "--model",
             "test",
         ],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.PIPE,
-        text=True,
     )
 
     try:
-        for s in [ai_socket, channel_socket]:
-            deadline = time.monotonic() + 15
-            while time.monotonic() < deadline:
-                from pathlib import Path as _P
-
-                if _P(s).exists():
-                    time.sleep(0.3)
-                    break
-                time.sleep(0.1)
+        assert await _wait_for_socket(ai_socket)
+        assert await _wait_for_socket(channel_socket)
 
         chunks = await read_sse(channel_socket, "hello")
         content = "".join(c.get("choices", [{}])[0].get("delta", {}).get("content", "") for c in chunks)
         assert "Hello from session" in content, f"Got: {content[:200]}"
     finally:
-        for p in [ses_proc, ai_proc]:
-            p.send_signal(signal.SIGTERM)
-            try:
-                p.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                p.kill()
+        await _stop_process(ses_proc)
+        await _stop_process(ai_proc)
 
 
 @pytest.mark.anyio

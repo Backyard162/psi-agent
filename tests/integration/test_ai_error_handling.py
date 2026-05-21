@@ -1,4 +1,4 @@
-# ruff: noqa: E402, E501, ASYNC220, ASYNC221, ASYNC240, ASYNC251, SIM117, F841, F401
+# ruff: noqa: E402, E501, ASYNC220, ASYNC240, ASYNC251, SIM117
 from __future__ import annotations
 
 """AI layer error handling integration tests."""
@@ -29,7 +29,9 @@ def _chunk(content: str = "", finish_reason: str | None = None) -> str:
     )
 
 
-def _start_ai_server(tmp_path: Path, mock: MockAIServer, socket_name: str = "ai.sock") -> tuple[str, str, subprocess.Popen]:
+def _start_ai_server(
+    tmp_path: Path, mock: MockAIServer, socket_name: str = "ai.sock"
+) -> tuple[str, str, subprocess.Popen]:
     """Start AI server subprocess and return (socket_path, base_url)."""
     base_url = mock.base_url
     socket_path = tmp_path / socket_name

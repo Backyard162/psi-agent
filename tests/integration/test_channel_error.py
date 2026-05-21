@@ -1,21 +1,18 @@
 from __future__ import annotations
 
-"""Channel error handling integration tests — using Python API."""
+from pathlib import Path
 
-import subprocess  # noqa: E402
-from pathlib import Path  # noqa: E402
+import anyio
+import pytest
+from aiohttp import ClientSession, ClientTimeout, UnixConnector, web
 
-import anyio  # noqa: E402
-import pytest  # noqa: E402
-from aiohttp import web  # noqa: E402
-
-from tests.integration.conftest import read_sse  # noqa: E402
+from tests.integration.conftest import read_sse
 
 
 @pytest.mark.anyio
 async def test_cli_session_socket_not_exists(tmp_path: Path) -> None:
     """CLI should print error when session socket doesn't exist."""
-    result = subprocess.run(
+    result = await anyio.run_process(
         [
             "uv",
             "run",
@@ -27,12 +24,10 @@ async def test_cli_session_socket_not_exists(tmp_path: Path) -> None:
             "--message",
             "hello",
         ],
-        capture_output=True,
-        text=True,
-        timeout=10,
+        check=False,
     )
     assert result.returncode != 0
-    combined = result.stdout + result.stderr
+    combined = (result.stdout.decode() if result.stdout else "") + (result.stderr.decode() if result.stderr else "")
     assert "Error" in combined or "error" in combined.lower()
 
 
@@ -56,8 +51,6 @@ async def test_session_busy_returns_503(tmp_path: Path) -> None:
 
     try:
         await anyio.sleep(0.2)
-        from aiohttp import ClientSession, ClientTimeout, UnixConnector
-
         timeout = ClientTimeout(total=5)
         connector = UnixConnector(path=str(channel_socket))
         async with (
@@ -78,7 +71,7 @@ async def test_cli_empty_message(tmp_path: Path) -> None:
     channel_socket = tmp_path / "empty.sock"
 
     async def handler(request: web.Request) -> web.StreamResponse:
-        await request.json()  # parse body
+        await request.json()
         resp = web.StreamResponse(status=200, reason="OK", headers={"Content-Type": "text/event-stream"})
         await resp.prepare(request)
         await resp.write(b"data: [DONE]\n\n")
@@ -94,7 +87,6 @@ async def test_cli_empty_message(tmp_path: Path) -> None:
     try:
         await anyio.sleep(0.2)
         chunks = await read_sse(str(channel_socket), "")
-        # Should not crash, empty message is valid
         assert isinstance(chunks, list)
     finally:
         await runner.cleanup()

@@ -1,4 +1,4 @@
-# ruff: noqa: E402, E501, ASYNC220, ASYNC221, ASYNC240, ASYNC251, SIM117, F841, F401
+# ruff: noqa: E402, ASYNC220, ASYNC251, F841
 from __future__ import annotations
 
 """Session tool execution corner case tests."""
@@ -37,7 +37,6 @@ def _chunk(
 async def _start_ai_server(tmp_path: Path, mock: MockAIServer) -> tuple[str, str, subprocess.Popen]:
     """Start AI server and return (ai_socket_path, channel_socket_path)."""
     import subprocess
-    import time
 
     base_url = await mock.start()
     ai_socket = tmp_path / "ai.sock"
@@ -215,7 +214,7 @@ async def test_tool_list_string_parameter(mock_ai_server: MockAIServer) -> None:
 
     from psi_agent.protocol import ToolFunction
 
-    async def multi(commands: list[str]) -> str:  # noqa: ARG001
+    async def multi(commands: list[str]) -> str:
         """Execute multiple commands."""
         return "done"
 
@@ -248,7 +247,7 @@ async def test_max_tool_rounds_limit(mock_ai_server: MockAIServer) -> None:
     from psi_agent.protocol import ToolFunction
     from psi_agent.session.agent import MAX_TOOL_ROUNDS, SessionAgent
 
-    async def echo_tool(message: str) -> str:  # noqa: ARG001
+    async def echo_tool(message: str) -> str:
         return "echo"
 
     tf = ToolFunction(name="echo", description="Echo", parameters={"type": "object", "properties": {}, "required": []})

@@ -1,16 +1,15 @@
 from __future__ import annotations
 
-"""Integration tests using real LLM APIs. Set env vars to enable each test group."""
+## """Integration tests using real LLM APIs. Set env vars to enable each test group."""##
+import os
+import signal
+import subprocess
+import time
+from pathlib import Path
 
-import os  # noqa: E402
-import signal  # noqa: E402
-import subprocess  # noqa: E402
-import time  # noqa: E402
-from pathlib import Path  # noqa: E402
-
-import anyio  # noqa: E402
-import pytest  # noqa: E402
-from aiohttp import ClientSession, ClientTimeout, UnixConnector  # noqa: E402
+import anyio
+import pytest
+from aiohttp import ClientSession, ClientTimeout, UnixConnector
 
 
 def _require_env(*names: str) -> tuple[str, ...]:
@@ -102,7 +101,6 @@ async def test_openai_layer_real_api(tmp_path: Path) -> None:
         assert len(chunks) > 0, "No chunks received"
         all_text = "".join(chunks)
         assert "hello" in all_text.lower(), f"Expected 'hello' in response, got: {all_text[:500]}"
-        print(f"\n  ✓ openai-completions: {len(chunks)} chunks")
 
     finally:
         _kill(proc)
@@ -138,7 +136,6 @@ async def test_openai_layer_ignores_client_model(tmp_path: Path) -> None:
         assert len(chunks) > 0, "No chunks received with garbage model"
         all_text = "".join(chunks)
         assert "hello" in all_text.lower(), f"Expected 'hello', got: {all_text[:500]}"
-        print("\n  ✓ model override: AI server ignored garbage model, still works")
 
     finally:
         _kill(proc)
@@ -188,7 +185,6 @@ async def test_session_end_to_end(tmp_path: Path) -> None:
 
         all_text = "".join(chunks)
         assert len(chunks) > 0, f"No response from session. Text: {all_text[:500]}"
-        print(f"\n  ✓ session e2e: {len(chunks)} chunks")
 
     finally:
         for proc in [session_proc, ai_proc]:
@@ -229,7 +225,6 @@ async def test_anthropic_layer_real_api(tmp_path: Path) -> None:
         assert len(chunks) > 0, "No chunks received from Anthropic backend"
         all_text = "".join(chunks)
         assert "hello" in all_text.lower(), f"Expected 'hello', got: {all_text[:500]}"
-        print(f"\n  ✓ anthropic-messages: {len(chunks)} chunks")
 
     finally:
         _kill(proc)

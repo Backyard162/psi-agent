@@ -1,17 +1,13 @@
 from __future__ import annotations
 
-"""Full end-to-end integration tests with mock AI — uses direct SSE API."""
-
 import json
-import signal
-import subprocess
-import time
 from pathlib import Path
 
+import anyio
 import pytest
 from aiohttp import web
 
-from tests.integration.conftest import MockAIServer, read_sse  # noqa: E402
+from tests.integration.conftest import MockAIServer, read_sse
 
 
 def _chunk(
@@ -38,26 +34,35 @@ def _chunk(
     )
 
 
-def _wait_for_socket(sock_path: Path, timeout_sec: float = 15.0) -> bool:
-    deadline = time.monotonic() + timeout_sec
-    while time.monotonic() < deadline:
-        if sock_path.exists():
-            time.sleep(0.3)
+async def _wait_for_socket(sock_path: str, timeout_sec: float = 15.0) -> bool:
+    deadline = anyio.current_time() + timeout_sec
+    sock_anyio = anyio.Path(sock_path)
+    while anyio.current_time() < deadline:
+        if await sock_anyio.exists():
+            await anyio.sleep(0.3)
             return True
-        time.sleep(0.1)
+        await anyio.sleep(0.1)
     return False
+
+
+async def _stop_process(proc) -> None:
+    proc.terminate()
+    try:
+        await proc.wait()
+    except Exception:
+        proc.kill()
 
 
 @pytest.mark.anyio
 async def test_full_pipeline_mock_ai(tmp_path: Path, mock_ai_server: MockAIServer) -> None:
-    """Full pipeline: mock AI → session → SSE read."""
+    """Full pipeline: mock AI -> session -> SSE read."""
     mock_ai_server.set_responses([_chunk(content="pipeline works", finish_reason="stop")])
     base_url = await mock_ai_server.start()
 
-    ai_socket = tmp_path / "ai.sock"
-    channel_socket = tmp_path / "channel.sock"
+    ai_socket = str(tmp_path / "ai.sock")
+    channel_socket = str(tmp_path / "channel.sock")
 
-    ai_proc = subprocess.Popen(
+    ai_proc = await anyio.open_process(
         [
             "uv",
             "run",
@@ -65,7 +70,7 @@ async def test_full_pipeline_mock_ai(tmp_path: Path, mock_ai_server: MockAIServe
             "ai",
             "openai-completions",
             "--session-socket",
-            str(ai_socket),
+            ai_socket,
             "--model",
             "test",
             "--api-key",
@@ -73,11 +78,8 @@ async def test_full_pipeline_mock_ai(tmp_path: Path, mock_ai_server: MockAIServe
             "--base-url",
             base_url,
         ],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.PIPE,
-        text=True,
     )
-    ses_proc = subprocess.Popen(
+    ses_proc = await anyio.open_process(
         [
             "uv",
             "run",
@@ -86,36 +88,29 @@ async def test_full_pipeline_mock_ai(tmp_path: Path, mock_ai_server: MockAIServe
             "--workspace",
             "examples/a-simple-bash-only-workspace",
             "--channel-socket",
-            str(channel_socket),
+            channel_socket,
             "--ai-socket",
-            str(ai_socket),
+            ai_socket,
             "--model",
             "test",
         ],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.PIPE,
-        text=True,
     )
 
     try:
-        assert _wait_for_socket(ai_socket)
-        assert _wait_for_socket(channel_socket)
+        assert await _wait_for_socket(ai_socket)
+        assert await _wait_for_socket(channel_socket)
 
-        chunks = await read_sse(str(channel_socket), "test pipeline")
+        chunks = await read_sse(channel_socket, "test pipeline")
         content = "".join(c.get("choices", [{}])[0].get("delta", {}).get("content", "") for c in chunks)
         assert "pipeline works" in content, f"Got: {content[:200]}"
     finally:
-        for p in [ses_proc, ai_proc]:
-            p.send_signal(signal.SIGTERM)
-            try:
-                p.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                p.kill()
+        await _stop_process(ses_proc)
+        await _stop_process(ai_proc)
 
 
 @pytest.mark.anyio
 async def test_full_pipeline_with_tool(tmp_path: Path) -> None:
-    """Full pipeline with tool call: mock AI → tool execution → final response."""
+    """Full pipeline with tool call: mock AI -> tool execution -> final response."""
     import socket as _sock
 
     req_count = 0
@@ -156,10 +151,10 @@ async def test_full_pipeline_with_tool(tmp_path: Path) -> None:
     site = web.SockSite(runner, sock)
     await site.start()
 
-    ai_socket = tmp_path / "ai.sock"
-    channel_socket = tmp_path / "channel.sock"
+    ai_socket = str(tmp_path / "ai.sock")
+    channel_socket = str(tmp_path / "channel.sock")
 
-    ai_proc = subprocess.Popen(
+    ai_proc = await anyio.open_process(
         [
             "uv",
             "run",
@@ -167,7 +162,7 @@ async def test_full_pipeline_with_tool(tmp_path: Path) -> None:
             "ai",
             "openai-completions",
             "--session-socket",
-            str(ai_socket),
+            ai_socket,
             "--model",
             "test",
             "--api-key",
@@ -175,11 +170,8 @@ async def test_full_pipeline_with_tool(tmp_path: Path) -> None:
             "--base-url",
             f"http://127.0.0.1:{port}/v1",
         ],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.PIPE,
-        text=True,
     )
-    ses_proc = subprocess.Popen(
+    ses_proc = await anyio.open_process(
         [
             "uv",
             "run",
@@ -188,30 +180,23 @@ async def test_full_pipeline_with_tool(tmp_path: Path) -> None:
             "--workspace",
             "examples/a-simple-bash-only-workspace",
             "--channel-socket",
-            str(channel_socket),
+            channel_socket,
             "--ai-socket",
-            str(ai_socket),
+            ai_socket,
             "--model",
             "test",
         ],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.PIPE,
-        text=True,
     )
 
     try:
-        assert _wait_for_socket(ai_socket)
-        assert _wait_for_socket(channel_socket)
-        chunks = await read_sse(str(channel_socket), "use tool")
+        assert await _wait_for_socket(ai_socket)
+        assert await _wait_for_socket(channel_socket)
+        chunks = await read_sse(channel_socket, "use tool")
         all_text = json.dumps(chunks)
         assert "tool was called" in all_text, f"Got: {all_text[:500]}"
     finally:
-        for p in [ses_proc, ai_proc]:
-            p.send_signal(signal.SIGTERM)
-            try:
-                p.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                p.kill()
+        await _stop_process(ses_proc)
+        await _stop_process(ai_proc)
         await runner.cleanup()
 
 
@@ -241,10 +226,10 @@ async def test_multiple_messages_history_accumulates(tmp_path: Path) -> None:
     site = web.SockSite(runner, sock)
     await site.start()
 
-    ai_socket = tmp_path / "ai.sock"
-    channel_socket = tmp_path / "channel.sock"
+    ai_socket = str(tmp_path / "ai.sock")
+    channel_socket = str(tmp_path / "channel.sock")
 
-    ai_proc = subprocess.Popen(
+    ai_proc = await anyio.open_process(
         [
             "uv",
             "run",
@@ -252,7 +237,7 @@ async def test_multiple_messages_history_accumulates(tmp_path: Path) -> None:
             "ai",
             "openai-completions",
             "--session-socket",
-            str(ai_socket),
+            ai_socket,
             "--model",
             "test",
             "--api-key",
@@ -260,11 +245,8 @@ async def test_multiple_messages_history_accumulates(tmp_path: Path) -> None:
             "--base-url",
             f"http://127.0.0.1:{port}/v1",
         ],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.PIPE,
-        text=True,
     )
-    ses_proc = subprocess.Popen(
+    ses_proc = await anyio.open_process(
         [
             "uv",
             "run",
@@ -273,32 +255,25 @@ async def test_multiple_messages_history_accumulates(tmp_path: Path) -> None:
             "--workspace",
             "examples/a-simple-bash-only-workspace",
             "--channel-socket",
-            str(channel_socket),
+            channel_socket,
             "--ai-socket",
-            str(ai_socket),
+            ai_socket,
             "--model",
             "test",
         ],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.PIPE,
-        text=True,
     )
 
     try:
-        assert _wait_for_socket(ai_socket)
-        assert _wait_for_socket(channel_socket)
-        chunks1 = await read_sse(str(channel_socket), "msg1")
-        time.sleep(0.3)
-        chunks2 = await read_sse(str(channel_socket), "msg2")
+        assert await _wait_for_socket(ai_socket)
+        assert await _wait_for_socket(channel_socket)
+        chunks1 = await read_sse(channel_socket, "msg1")
+        await anyio.sleep(0.3)
+        chunks2 = await read_sse(channel_socket, "msg2")
         c1 = "".join(c.get("choices", [{}])[0].get("delta", {}).get("content", "") for c in chunks1)
         c2 = "".join(c.get("choices", [{}])[0].get("delta", {}).get("content", "") for c in chunks2)
         assert "response 1" in c1, f"Got: {c1}"
         assert "response 2" in c2, f"Got: {c2}"
     finally:
-        for p in [ses_proc, ai_proc]:
-            p.send_signal(signal.SIGTERM)
-            try:
-                p.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                p.kill()
+        await _stop_process(ses_proc)
+        await _stop_process(ai_proc)
         await runner.cleanup()
