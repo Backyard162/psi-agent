@@ -4,6 +4,8 @@ from __future__ import annotations
 """Session tool execution corner case tests."""
 
 import json
+import subprocess
+import time
 from pathlib import Path
 
 import pytest
@@ -32,7 +34,7 @@ def _chunk(
     )
 
 
-async def _start_ai_server(tmp_path: Path, mock: MockAIServer) -> tuple[str, str]:
+async def _start_ai_server(tmp_path: Path, mock: MockAIServer) -> tuple[str, str, subprocess.Popen]:
     """Start AI server and return (ai_socket_path, channel_socket_path)."""
     import subprocess
     import time

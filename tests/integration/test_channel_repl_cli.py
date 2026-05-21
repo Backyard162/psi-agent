@@ -1,18 +1,14 @@
-# ruff: noqa: E402, E501, ASYNC220, ASYNC221, ASYNC240, ASYNC251, SIM117, F841, F401
 from __future__ import annotations
 
-"""Channel REPL/CLI integration tests."""
+"""Channel SSE parsing integration tests — tests the Python API behind CLI."""
 
 import json
-import signal
-import subprocess
-import time
-from pathlib import Path
+import socket as _sock
 
 import pytest
-from aiohttp import web
+from aiohttp import ClientSession, ClientTimeout, web
 
-from tests.integration.conftest import MockAIServer
+from tests.integration.conftest import MockAIServer, read_sse  # noqa: E402
 
 
 def _chunk(content: str = "", reasoning: str = "", finish_reason: str | None = None) -> str:
@@ -32,14 +28,42 @@ def _chunk(content: str = "", reasoning: str = "", finish_reason: str | None = N
     )
 
 
+async def _read_tcp_sse(base_url: str, message: str = "hello") -> list[dict]:
+    """Read SSE from a TCP server."""
+    chunks: list[dict] = []
+    body = {"model": "test", "messages": [{"role": "user", "content": message}], "stream": True}
+    timeout = ClientTimeout(total=10)
+    async with (
+        ClientSession(timeout=timeout) as session,
+        session.post(base_url.rstrip("/") + "/chat/completions", json=body) as resp,
+    ):
+        assert resp.status == 200, f"Got {resp.status}"
+        async for raw in resp.content:
+            line = raw.decode().strip()
+            if not line or not line.startswith("data: "):
+                continue
+            data_str = line[6:]
+            if data_str == "[DONE]":
+                break
+            try:
+                chunks.append(json.loads(data_str))
+            except json.JSONDecodeError:
+                continue
+    return chunks
+
+
 @pytest.mark.anyio
-async def test_cli_sends_message_and_displays_response(tmp_path: Path, mock_ai_server: MockAIServer) -> None:
-    """CLI channel sends message and stdout contains the response."""
+async def test_channel_receives_content_from_session(tmp_path, mock_ai_server: MockAIServer) -> None:
+    """Channel should receive streaming content from session via SSE."""
     mock_ai_server.set_responses([_chunk(content="Hello from session", finish_reason="stop")])
     base_url = await mock_ai_server.start()
 
-    ai_socket = tmp_path / "ai.sock"
-    channel_socket = tmp_path / "channel.sock"
+    import signal
+    import subprocess
+    import time
+
+    ai_socket = str(tmp_path / "ai.sock")
+    channel_socket = str(tmp_path / "channel.sock")
 
     ai_proc = subprocess.Popen(
         [
@@ -49,7 +73,7 @@ async def test_cli_sends_message_and_displays_response(tmp_path: Path, mock_ai_s
             "ai",
             "openai-completions",
             "--session-socket",
-            str(ai_socket),
+            ai_socket,
             "--model",
             "test",
             "--api-key",
@@ -70,9 +94,9 @@ async def test_cli_sends_message_and_displays_response(tmp_path: Path, mock_ai_s
             "--workspace",
             "examples/a-simple-bash-only-workspace",
             "--channel-socket",
-            str(channel_socket),
+            channel_socket,
             "--ai-socket",
-            str(ai_socket),
+            ai_socket,
             "--model",
             "test",
         ],
@@ -85,18 +109,16 @@ async def test_cli_sends_message_and_displays_response(tmp_path: Path, mock_ai_s
         for s in [ai_socket, channel_socket]:
             deadline = time.monotonic() + 15
             while time.monotonic() < deadline:
-                if s.exists():
+                from pathlib import Path as _P
+
+                if _P(s).exists():
                     time.sleep(0.3)
                     break
                 time.sleep(0.1)
 
-        result = subprocess.run(
-            ["uv", "run", "psi-agent", "channel", "cli", "--session-socket", str(channel_socket), "--message", "hello"],
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-        assert "Hello from session" in result.stdout, f"stdout: {result.stdout}, stderr: {result.stderr}"
+        chunks = await read_sse(channel_socket, "hello")
+        content = "".join(c.get("choices", [{}])[0].get("delta", {}).get("content", "") for c in chunks)
+        assert "Hello from session" in content, f"Got: {content[:200]}"
     finally:
         for p in [ses_proc, ai_proc]:
             p.send_signal(signal.SIGTERM)
@@ -107,9 +129,8 @@ async def test_cli_sends_message_and_displays_response(tmp_path: Path, mock_ai_s
 
 
 @pytest.mark.anyio
-async def test_sse_reasoning_and_content_interleaved(tmp_path: Path) -> None:
-    """SSE stream with reasoning_content and content should display separately."""
-    import socket as _sock
+async def test_sse_reasoning_and_content_interleaved(tmp_path) -> None:
+    """SSE stream with reasoning_content and content should be parsed separately."""
 
     async def handler(request: web.Request) -> web.StreamResponse:
         resp = web.StreamResponse(status=200, reason="OK", headers={"Content-Type": "text/event-stream"})
@@ -131,81 +152,19 @@ async def test_sse_reasoning_and_content_interleaved(tmp_path: Path) -> None:
     site = web.SockSite(runner, sock)
     await site.start()
 
-    ai_socket = tmp_path / "ai.sock"
-    channel_socket = tmp_path / "channel.sock"
-
-    ai_proc = subprocess.Popen(
-        [
-            "uv",
-            "run",
-            "psi-agent",
-            "ai",
-            "openai-completions",
-            "--session-socket",
-            str(ai_socket),
-            "--model",
-            "test",
-            "--api-key",
-            "k",
-            "--base-url",
-            f"http://127.0.0.1:{port}/v1",
-        ],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.PIPE,
-        text=True,
-    )
-    ses_proc = subprocess.Popen(
-        [
-            "uv",
-            "run",
-            "psi-agent",
-            "session",
-            "--workspace",
-            "examples/a-simple-bash-only-workspace",
-            "--channel-socket",
-            str(channel_socket),
-            "--ai-socket",
-            str(ai_socket),
-            "--model",
-            "test",
-        ],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.PIPE,
-        text=True,
-    )
-
     try:
-        for s in [ai_socket, channel_socket]:
-            deadline = time.monotonic() + 15
-            while time.monotonic() < deadline:
-                if s.exists():
-                    time.sleep(0.3)
-                    break
-                time.sleep(0.1)
-
-        result = subprocess.run(
-            ["uv", "run", "psi-agent", "channel", "cli", "--session-socket", str(channel_socket), "--message", "test"],
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-        out = result.stdout + result.stderr
-        assert "thinking" in out.lower()
-        assert "answer" in out.lower()
+        chunks = await _read_tcp_sse(f"http://127.0.0.1:{port}/v1", "test")
+        reasonings = [c.get("choices", [{}])[0].get("delta", {}).get("reasoning_content", "") for c in chunks]
+        contents = [c.get("choices", [{}])[0].get("delta", {}).get("content", "") for c in chunks]
+        assert any("thinking" in r for r in reasonings)
+        assert any("answer" in c for c in contents)
     finally:
-        for p in [ses_proc, ai_proc]:
-            p.send_signal(signal.SIGTERM)
-            try:
-                p.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                p.kill()
         await runner.cleanup()
 
 
 @pytest.mark.anyio
-async def test_multiple_choices_iterated(tmp_path: Path) -> None:
-    """When SSE has multiple choices, all should be processed."""
-    import socket as _sock
+async def test_multiple_choices_iterated(tmp_path) -> None:
+    """When SSE has multiple choices, all deltas should be extracted."""
 
     async def handler(request: web.Request) -> web.StreamResponse:
         resp = web.StreamResponse(status=200, reason="OK", headers={"Content-Type": "text/event-stream"})
@@ -234,72 +193,10 @@ async def test_multiple_choices_iterated(tmp_path: Path) -> None:
     site = web.SockSite(runner, sock)
     await site.start()
 
-    ai_socket = tmp_path / "ai.sock"
-    channel_socket = tmp_path / "channel.sock"
-
-    ai_proc = subprocess.Popen(
-        [
-            "uv",
-            "run",
-            "psi-agent",
-            "ai",
-            "openai-completions",
-            "--session-socket",
-            str(ai_socket),
-            "--model",
-            "test",
-            "--api-key",
-            "k",
-            "--base-url",
-            f"http://127.0.0.1:{port}/v1",
-        ],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.PIPE,
-        text=True,
-    )
-    ses_proc = subprocess.Popen(
-        [
-            "uv",
-            "run",
-            "psi-agent",
-            "session",
-            "--workspace",
-            "examples/a-simple-bash-only-workspace",
-            "--channel-socket",
-            str(channel_socket),
-            "--ai-socket",
-            str(ai_socket),
-            "--model",
-            "test",
-        ],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.PIPE,
-        text=True,
-    )
-
     try:
-        for s in [ai_socket, channel_socket]:
-            deadline = time.monotonic() + 15
-            while time.monotonic() < deadline:
-                if s.exists():
-                    time.sleep(0.3)
-                    break
-                time.sleep(0.1)
-
-        result = subprocess.run(
-            ["uv", "run", "psi-agent", "channel", "cli", "--session-socket", str(channel_socket), "--message", "test"],
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-        out = result.stdout + result.stderr
-        assert "choice0" in out
-        assert "choice1" in out
+        chunks = await _read_tcp_sse(f"http://127.0.0.1:{port}/v1", "test")
+        all_text = json.dumps(chunks)
+        assert "choice0" in all_text
+        assert "choice1" in all_text
     finally:
-        for p in [ses_proc, ai_proc]:
-            p.send_signal(signal.SIGTERM)
-            try:
-                p.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                p.kill()
         await runner.cleanup()

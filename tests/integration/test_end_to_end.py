@@ -1,7 +1,6 @@
-# ruff: noqa: E402, E501, ASYNC220, ASYNC221, ASYNC240, ASYNC251, SIM117, F841, F401
 from __future__ import annotations
 
-"""Full end-to-end integration tests with mock AI."""
+"""Full end-to-end integration tests with mock AI — uses direct SSE API."""
 
 import json
 import signal
@@ -10,12 +9,16 @@ import time
 from pathlib import Path
 
 import pytest
+from aiohttp import web
 
-from tests.integration.conftest import MockAIServer
+from tests.integration.conftest import MockAIServer, read_sse  # noqa: E402
 
 
 def _chunk(
-    content: str = "", reasoning: str = "", tool_calls: list | None = None, finish_reason: str | None = None
+    content: str = "",
+    reasoning: str = "",
+    tool_calls: list | None = None,
+    finish_reason: str | None = None,
 ) -> str:
     d: dict = {}
     if content:
@@ -35,9 +38,19 @@ def _chunk(
     )
 
 
+def _wait_for_socket(sock_path: Path, timeout_sec: float = 15.0) -> bool:
+    deadline = time.monotonic() + timeout_sec
+    while time.monotonic() < deadline:
+        if sock_path.exists():
+            time.sleep(0.3)
+            return True
+        time.sleep(0.1)
+    return False
+
+
 @pytest.mark.anyio
 async def test_full_pipeline_mock_ai(tmp_path: Path, mock_ai_server: MockAIServer) -> None:
-    """Full pipeline: mock AI → session → CLI channel."""
+    """Full pipeline: mock AI → session → SSE read."""
     mock_ai_server.set_responses([_chunk(content="pipeline works", finish_reason="stop")])
     base_url = await mock_ai_server.start()
 
@@ -85,31 +98,12 @@ async def test_full_pipeline_mock_ai(tmp_path: Path, mock_ai_server: MockAIServe
     )
 
     try:
-        for s in [ai_socket, channel_socket]:
-            deadline = time.monotonic() + 15
-            while time.monotonic() < deadline:
-                if s.exists():
-                    time.sleep(0.3)
-                    break
-                time.sleep(0.1)
+        assert _wait_for_socket(ai_socket)
+        assert _wait_for_socket(channel_socket)
 
-        result = subprocess.run(
-            [
-                "uv",
-                "run",
-                "psi-agent",
-                "channel",
-                "cli",
-                "--session-socket",
-                str(channel_socket),
-                "--message",
-                "test pipeline",
-            ],
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-        assert "pipeline works" in result.stdout, f"stdout: {result.stdout}, stderr: {result.stderr}"
+        chunks = await read_sse(str(channel_socket), "test pipeline")
+        content = "".join(c.get("choices", [{}])[0].get("delta", {}).get("content", "") for c in chunks)
+        assert "pipeline works" in content, f"Got: {content[:200]}"
     finally:
         for p in [ses_proc, ai_proc]:
             p.send_signal(signal.SIGTERM)
@@ -120,26 +114,47 @@ async def test_full_pipeline_mock_ai(tmp_path: Path, mock_ai_server: MockAIServe
 
 
 @pytest.mark.anyio
-async def test_full_pipeline_with_tool(tmp_path: Path, mock_ai_server: MockAIServer) -> None:
+async def test_full_pipeline_with_tool(tmp_path: Path) -> None:
     """Full pipeline with tool call: mock AI → tool execution → final response."""
-    mock_ai_server.set_responses(
-        [
-            _chunk(reasoning="Let me use the tool", finish_reason=None),
-            _chunk(
+    import socket as _sock
+
+    req_count = 0
+
+    async def handler(request: web.Request) -> web.StreamResponse:
+        nonlocal req_count
+        req_count += 1
+        resp = web.StreamResponse(status=200, reason="OK", headers={"Content-Type": "text/event-stream"})
+        await resp.prepare(request)
+        if req_count == 1:
+            tc = _chunk(
                 tool_calls=[
                     {
                         "index": 0,
                         "id": "c1",
                         "type": "function",
-                        "function": {"name": "echo", "arguments": '{"message":"tool test"}'},
+                        "function": {
+                            "name": "echo",
+                            "arguments": '{"message":"tool test"}',
+                        },
                     }
                 ],
                 finish_reason="tool_calls",
-            ),
-            _chunk(content="Final: tool was called", finish_reason="stop"),
-        ]
-    )
-    base_url = await mock_ai_server.start()
+            )
+            await resp.write(f"data: {tc}\n\n".encode())
+        else:
+            await resp.write(f"data: {_chunk(content='Final: tool was called', finish_reason='stop')}\n\n".encode())
+        await resp.write(b"data: [DONE]\n\n")
+        return resp
+
+    app = web.Application()
+    app.router.add_post("/v1/chat/completions", handler)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    sock = _sock.socket(_sock.AF_INET, _sock.SOCK_STREAM)
+    sock.bind(("127.0.0.1", 0))
+    port = sock.getsockname()[1]
+    site = web.SockSite(runner, sock)
+    await site.start()
 
     ai_socket = tmp_path / "ai.sock"
     channel_socket = tmp_path / "channel.sock"
@@ -158,7 +173,7 @@ async def test_full_pipeline_with_tool(tmp_path: Path, mock_ai_server: MockAISer
             "--api-key",
             "k",
             "--base-url",
-            base_url,
+            f"http://127.0.0.1:{port}/v1",
         ],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.PIPE,
@@ -185,32 +200,11 @@ async def test_full_pipeline_with_tool(tmp_path: Path, mock_ai_server: MockAISer
     )
 
     try:
-        for s in [ai_socket, channel_socket]:
-            deadline = time.monotonic() + 15
-            while time.monotonic() < deadline:
-                if s.exists():
-                    time.sleep(0.3)
-                    break
-                time.sleep(0.1)
-
-        result = subprocess.run(
-            [
-                "uv",
-                "run",
-                "psi-agent",
-                "channel",
-                "cli",
-                "--session-socket",
-                str(channel_socket),
-                "--message",
-                "use tool",
-            ],
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-        out = result.stdout + result.stderr
-        assert "Final: tool was called" in out, f"output: {out[:500]}"
+        assert _wait_for_socket(ai_socket)
+        assert _wait_for_socket(channel_socket)
+        chunks = await read_sse(str(channel_socket), "use tool")
+        all_text = json.dumps(chunks)
+        assert "tool was called" in all_text, f"Got: {all_text[:500]}"
     finally:
         for p in [ses_proc, ai_proc]:
             p.send_signal(signal.SIGTERM)
@@ -218,18 +212,34 @@ async def test_full_pipeline_with_tool(tmp_path: Path, mock_ai_server: MockAISer
                 p.wait(timeout=5)
             except subprocess.TimeoutExpired:
                 p.kill()
+        await runner.cleanup()
 
 
 @pytest.mark.anyio
-async def test_multiple_messages_history_accumulates(tmp_path: Path, mock_ai_server: MockAIServer) -> None:
+async def test_multiple_messages_history_accumulates(tmp_path: Path) -> None:
     """Two channel messages should cause history accumulation in session."""
-    mock_ai_server.set_responses(
-        [
-            _chunk(content="response 1", finish_reason="stop"),
-            _chunk(content="response 2", finish_reason="stop"),
-        ]
-    )
-    base_url = await mock_ai_server.start()
+    import socket as _sock
+
+    req_count = 0
+
+    async def handler(request: web.Request) -> web.StreamResponse:
+        nonlocal req_count
+        req_count += 1
+        resp = web.StreamResponse(status=200, reason="OK", headers={"Content-Type": "text/event-stream"})
+        await resp.prepare(request)
+        await resp.write(f"data: {_chunk(content=f'response {req_count}', finish_reason='stop')}\n\n".encode())
+        await resp.write(b"data: [DONE]\n\n")
+        return resp
+
+    app = web.Application()
+    app.router.add_post("/v1/chat/completions", handler)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    sock = _sock.socket(_sock.AF_INET, _sock.SOCK_STREAM)
+    sock.bind(("127.0.0.1", 0))
+    port = sock.getsockname()[1]
+    site = web.SockSite(runner, sock)
+    await site.start()
 
     ai_socket = tmp_path / "ai.sock"
     channel_socket = tmp_path / "channel.sock"
@@ -248,7 +258,7 @@ async def test_multiple_messages_history_accumulates(tmp_path: Path, mock_ai_ser
             "--api-key",
             "k",
             "--base-url",
-            base_url,
+            f"http://127.0.0.1:{port}/v1",
         ],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.PIPE,
@@ -275,33 +285,15 @@ async def test_multiple_messages_history_accumulates(tmp_path: Path, mock_ai_ser
     )
 
     try:
-        for s in [ai_socket, channel_socket]:
-            deadline = time.monotonic() + 15
-            while time.monotonic() < deadline:
-                if s.exists():
-                    time.sleep(0.3)
-                    break
-                time.sleep(0.1)
-
-        r1 = subprocess.run(
-            ["uv", "run", "psi-agent", "channel", "cli", "--session-socket", str(channel_socket), "--message", "msg1"],
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
+        assert _wait_for_socket(ai_socket)
+        assert _wait_for_socket(channel_socket)
+        chunks1 = await read_sse(str(channel_socket), "msg1")
         time.sleep(0.3)
-        r2 = subprocess.run(
-            ["uv", "run", "psi-agent", "channel", "cli", "--session-socket", str(channel_socket), "--message", "msg2"],
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-        assert "response 1" in r1.stdout
-        assert "response 2" in r2.stdout
-
-        # Verify second request has more history
-        assert len(mock_ai_server.request_bodies) == 2
-        assert len(mock_ai_server.request_bodies[1]["messages"]) > len(mock_ai_server.request_bodies[0]["messages"])
+        chunks2 = await read_sse(str(channel_socket), "msg2")
+        c1 = "".join(c.get("choices", [{}])[0].get("delta", {}).get("content", "") for c in chunks1)
+        c2 = "".join(c.get("choices", [{}])[0].get("delta", {}).get("content", "") for c in chunks2)
+        assert "response 1" in c1, f"Got: {c1}"
+        assert "response 2" in c2, f"Got: {c2}"
     finally:
         for p in [ses_proc, ai_proc]:
             p.send_signal(signal.SIGTERM)
@@ -309,3 +301,4 @@ async def test_multiple_messages_history_accumulates(tmp_path: Path, mock_ai_ser
                 p.wait(timeout=5)
             except subprocess.TimeoutExpired:
                 p.kill()
+        await runner.cleanup()

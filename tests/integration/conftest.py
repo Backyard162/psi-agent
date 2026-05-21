@@ -109,7 +109,7 @@ class MockAIServer:
 
 
 @pytest.fixture
-async def mock_ai_server(tmp_path: Path) -> MockAIServer:  # type: ignore[misc]
+async def mock_ai_server(tmp_path: Path) -> MockAIServer:  # ty: ignore[invalid-return-type]
     srv = MockAIServer(tmp_path)
     yield srv
     await srv.cleanup()
