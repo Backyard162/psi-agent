@@ -4,9 +4,9 @@
 
 **Goal:** 实现 psi-agent 微内核 agent 框架，包含 ai/session/channel 三个独立组件，通过 Unix socket 以 OpenAI HTTP/SSE 协议通信。
 
-**Architecture:** 单 Python package（`psi_agent/`），tyro Union dataclasses 驱动 CLI 子命令。所有 IO 异步（anyio）。组件通过 aiohttp Unix socket 通信。Session 解析 workspace 目录结构并按需执行 tool。
+**Architecture:** 单 Python package src-layout（`src/psi_agent/`），tyro Union dataclasses 驱动 CLI 子命令。所有 IO 异步（anyio）。组件通过 aiohttp Unix socket 通信。Session 解析 workspace 目录结构并按需执行 tool。
 
-**Tech Stack:** Python >= 3.14, anyio, aiohttp, tyro, loguru, prompt-toolkit, ruff, ty, hatch-vcs, pytest + pytest-asyncio(anyio mode)
+**Tech Stack:** Python >= 3.14, anyio, aiohttp, tyro, loguru, prompt-toolkit, rich, ruff, ty, hatch-vcs, pytest + pytest-asyncio(anyio mode)
 
 **Design Spec:** `docs/superpowers/specs/2026-05-20-psi-agent-design.md`
 
@@ -442,6 +442,19 @@ def main() -> None:
 | 合并嵌套 `async with` | 3 处 `ClientSession` + `session.post()` 合并为单语句，消除 SIM117 |
 | `SockSite` 替换 `TCPSite._server` | 测试中通过预绑定 socket 获取随机端口，消除 `unresolved-attribute` |
 | Dev deps 补充 | 添加 `ty>=0.0.38` 类型检查、`prompt-toolkit>=3.0` 异步 REPL |
+| Ruff 规则扩展 | select 从 7 组扩展到 11 组：加 `B`、`RUF`、`N`、`T20` |
+| SessionAgent TCP 支持 | ai_socket 参数同时支持 Unix socket 路径和 `http://` URL |
 
-最终抑制仅剩 3 处（2 处测试桩 ARG001 + 1 处 tyro 类型推断局限），均为合理例外。
+## 后续质量改进
+
+| 改进 | 说明 |
+|------|------|
+| src-layout | `psi_agent/` → `src/psi_agent/`，删除 `tests/conftest.py`，用 `tests/__init__.py` + editable install 替代 |
+| Rich 终端 | 15 处 `print()` → `console.print()`（`style="dim"` 思考过程、`[red]` 错误），T201 per-file-ignore 删除 |
+| per-file-ignore 清零 | 5 条 → 0 条（通过 anyio 等效替代消除 ASYNC220/221/240/251 + 移除 E402） |
+| Ruff 规则补充 | select 加 `"PLC"`（`PLC0415` 禁止非顶级 import），29 处修复 |
+| AGPLv3 | `LICENSE.md` + pyproject.toml license/author 字段 |
+| GitHub CI | `.github/workflows/ci.yml`（push/PR → lint → test，tag → PyPI publish via Trusted Publisher） |
+| Dependabot | `.github/dependabot.yml`（pip + github-actions，weekly） |
+| 最终抑制 | **2 处 ty:ignore**（tyro overload + pytest fixture），**0 ruff noqa**，**0 per-file-ignore** |
 

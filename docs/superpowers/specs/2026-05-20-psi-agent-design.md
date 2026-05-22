@@ -51,26 +51,49 @@ psi/
 │   ├── ai/
 │   │   ├── __init__.py
 │   │   ├── openai_completions/
-│   │   │   ├── __init__.py         # AiOpenAICompletions dataclass + run()
+│   │   │   ├── __init__.py         # OpenAICompletions dataclass + run()
 │   │   │   └── server.py           # aiohttp Unix socket server
 │   │   └── anthropic_messages/
-│   │       ├── __init__.py         # AiAnthropicMessages dataclass + run()
+│   │       ├── __init__.py         # AnthropicMessages dataclass + run()
 │   │       └── server.py           # aiohttp Unix socket server + thinking 转换
 │   ├── session/
-│   │   ├── __init__.py             # SessionConfig dataclass + run()
+│   │   ├── __init__.py             # Session dataclass + run()
 │   │   ├── server.py               # aiohttp Unix socket server（channel 端）
 │   │   ├── agent.py                # 核心 agent loop
-│   │   ├── workspace.py            # 解析 workspace 结构
 │   │   ├── tools.py                # 从 tools/*.py 加载 tool 函数
 │   │   └── scheduler.py            # cron 调度器
 │   └── channel/
 │       ├── __init__.py
 │       ├── repl/
 │       │   ├── __init__.py         # ChannelRepl dataclass + run()
-│       │   └── client.py           # 连接 session socket，REPL 循环
+│       │   └── client.py           # 连接 session socket，REPL 循环（Rich + prompt_toolkit multiline）
 │       └── cli/
 │           ├── __init__.py         # ChannelCli dataclass + run()
-│           └── client.py           # 连接 session socket，单次消息
+│           └── client.py           # 连接 session socket（Rich 格式化输出）
+├── tests/
+│   ├── __init__.py
+│   ├── integration/
+│   │   ├── __init__.py
+│   │   ├── conftest.py
+│   │   ├── test_ai_error_handling.py
+│   │   ├── test_channel_error.py
+│   │   ├── test_channel_repl_cli.py
+│   │   ├── test_end_to_end.py
+│   │   ├── test_real_api.py
+│   │   ├── test_session_concurrency.py
+│   │   ├── test_session_tools.py
+│   │   └── test_session_workspace.py
+│   └── psi_agent/
+│       ├── ai/
+│       │   ├── test_openai_completions.py
+│       │   └── test_anthropic_messages.py
+│       ├── session/
+│       │   ├── test_agent.py
+│       │   ├── test_tools.py
+│       │   └── test_scheduler.py
+│       └── channel/
+│           ├── test_repl.py
+│           └── test_cli.py
 ├── examples/
 │   └── a-simple-bash-only-workspace/
 │       ├── tools/
@@ -83,20 +106,11 @@ psi/
 │       │       └── TASK.md
 │       └── systems/
 │           └── system.py
-└── tests/
-    ├── conftest.py
-    └── psi_agent/
-        ├── ai/
-        │   ├── test_openai_completions.py
-        │   └── test_anthropic_messages.py
-        ├── session/
-        │   ├── test_agent.py
-        │   ├── test_workspace.py
-        │   ├── test_tools.py
-        │   └── test_scheduler.py
-        └── channel/
-            ├── test_repl.py
-            └── test_cli.py
+├── .github/
+│   ├── workflows/
+│   │   └── ci.yml
+│   └── dependabot.yml
+├── LICENSE.md
 ```
 
 ---
@@ -204,10 +218,11 @@ class AiAnthropicMessages:
 
 ```python
 @dataclass
-class SessionConfig:
+class Session:
     workspace: str
     channel_socket: str
     ai_socket: str
+    model: str = "gpt-4"
     verbose: bool = False
 
     async def run(self) -> None: ...
@@ -358,14 +373,14 @@ class ChannelCli:
 from typing import Annotated
 from tyro import conf
 
-from psi_agent.ai.openai_completions import AiOpenAICompletions
-from psi_agent.ai.anthropic_messages import AiAnthropicMessages
-from psi_agent.session import SessionConfig
+from psi_agent.ai.openai_completions import OpenAICompletions
+from psi_agent.ai.anthropic_messages import AnthropicMessages
+from psi_agent.session import Session
 from psi_agent.channel.repl import ChannelRepl
 from psi_agent.channel.cli import ChannelCli
 
 AiGroup = Annotated[
-    AiOpenAICompletions | AiAnthropicMessages,
+    OpenAICompletions | AnthropicMessages,
     conf.subcommand(name="ai", description="AI backend services"),
 ]
 
@@ -478,7 +493,7 @@ async def bash(command: str) -> str:
     Args:
         command: The bash command to execute.
     """
-    result = await anyio.run_process(command, shell=True)
+    result = await anyio.run_process(["/bin/bash", "-c", command])
     return result.stdout.decode().strip()
 ```
 
