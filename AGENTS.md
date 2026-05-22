@@ -13,6 +13,19 @@ psi-agent 是一个**微内核**式的 agent 框架。核心理念是：
 5. **一切异步**: 所有 IO 操作使用 `anyio`，永不使用 `asyncio` 原生 API 或 `pathlib`
 6. **零抑制**: 不堆 `noqa`，不设 `per-file-ignores`。代码本身应符合规则
 
+## 架构决策记录
+
+以下是设计过程中有意为之的关键决策：
+
+**为什么用 Unix socket 而非 TCP？**
+Socket 文件天然隔离——不同项目用不同文件路径，互不干扰。没有端口冲突，没有防火墙问题。本地组件通信不需要网络栈开销。
+
+**为什么 AI 是 Server、Session 是 Client？**
+AI 后端无状态，不保存任何信息。多个 Session 可以共享同一个 AI backend。如果反过来（Session 是 Server），每个 Session 都要自行配置上游 API，违反"组合"原则。
+
+**为什么 Session 不持久化 history？**
+微内核原则：核心只做通信和路由。history 是实现细节，不应成为框架的一部分。未来可以加可选的持久化插件，但内核本身体积不应膨胀。
+
 ## 技术栈
 
 | 领域 | 技术 |
@@ -52,6 +65,30 @@ src/
 
 项目使用 **src-layout**（`src/psi_agent/`），由 `uv sync` 安装为 editable package。
 
+## Workspace 启动流程
+
+`Session.run()` 的启动顺序（该顺序有依赖关系，不可随意调整）：
+
+```
+1. setup_logging(verbose)
+2. 解析 workspace 路径（anyio.Path.resolve()）
+3. load_tools_from_workspace(tools_dir)     → tools 元数据（name, description, parameters）
+4. load_schedules_from_workspace(...)       → Schedule 列表
+5. 加载 system_prompt_builder()             → 调用 -> system_prompt 字符串
+6. 创建 SessionAgent(..., system_prompt)
+7. 注册 tool callables：重新遍历 tools/*.py，找到 async 函数并 agent.register_tool_func(name, func)
+8. 创建 anyio.Lock()
+9. 启动 anyio.task_group：
+   ├── schedule_loop(): 每 30s 检查 cron，触发时将 AI 回复暂存
+   └── partial(serve_session, ...): aiohttp Unix socket server
+```
+
+**关键点**：tool 的注册分两阶段——
+- `load_tools_from_workspace()` 解析**元数据**（给 AI 看的 function definition）
+- `register_tool_func()` 绑定**实际 callable**（session 执行时调用）
+
+两者都在 `run()` 中完成，使用同一个 `workspace/tools/*.py` 文件列表，但加载目的不同。
+
 ## 核心通信协议
 
 所有组件通过 **aiohttp Unix socket** 以 **OpenAI Chat Completions HTTP/SSE** 格式通信：
@@ -79,10 +116,12 @@ SSE 流中的特殊字段：
 6. 解析 SSE 流：
    - content → yield 给 channel
    - reasoning_content → yield 给 channel
-   - tool_calls → 累积
+   - tool_calls → 累积（按 index 拼接 partial JSON）
    - finish_reason="tool_calls" → 执行 tool → 结果追加到 history → 回到步骤 5
    - finish_reason="stop" → 最终 content 追加到 history → 释放锁
 7. 最多 10 轮 tool call
+
+**注意**：Channel 不发送 history。每次请求只带最新一条 user message，Session 自己维护完整 history。这是有意为之——复用 OpenAI 协议格式，但历史管理由 Session 负责。
 
 ## Tool 加载约定
 
@@ -93,6 +132,48 @@ SSE 流中的特殊字段：
 - 函数必须是 async、非私有（`_` 开头跳过）
 - Tool 加载使用 `anyio.Path`，全链路 async
 
+## Tool 调用细节
+
+**参数类型解析**：
+由于项目全量使用 `from __future__ import annotations`，函数注解以字符串形式存储。因此 `ToolFunction.from_callable()` 必须用 `typing.get_type_hints()` 解析，**不能**直接读 `param.annotation`。
+
+**流式 Tool Call 累积**：
+AI 的 tool_calls 通过 SSE 流式传输——多个 chunk 中的 `delta.tool_calls` 逐步补充同一 index 的参数。Agent 用 `accumulated_tool_calls: dict[int, dict]` 按 index 累积：
+- `id`：取第一次非空值
+- `function.name`：取第一次非空值
+- `function.arguments`：**拼接**所有 partial JSON 片段
+
+收到 `finish_reason="tool_calls"` 后，按 index 排序生成完整 tool_calls 列表，逐一执行。
+
+**Tool 执行容错**：
+- `arguments` 可能不是合法 JSON → `json.loads` 包在 try/except 中，失败时 fallback 为 `{}`
+- Tool 函数可能抛异常 → 以错误文本作为 tool result 返回，不中断 agent loop
+- Tool 返回非字符串（int, None） → 通过 `str()` 强转
+
+## Schedule 机制完整流程
+
+```
+后台 loop（每 30s）：
+  for schedule in schedules:
+    if schedule.should_run_now():    ← croniter 比较上次运行时间
+      schedule.mark_run()
+      用 schedule.to_user_message() 构造带标注的 user msg
+        ↓
+      async with lock:               ← 等当前请求完成
+        调用 agent.run(msg)          ← AI 处理
+        流式结果追加到 pending_chunks
+        agent.set_pending_schedule_chunks(chunks)
+        ↓
+      下次 channel 请求到达时：
+        SessionAgent.run() 开头先 yield 所有 _pending_schedule_chunks
+        然后正常处理当前 channel 消息
+```
+
+关键点：
+- Schedule 响应的 content 和 reasoning_content 各自存在于各自的消息周期，不会交错
+- 如果连续多个 schedule 在同一个 30s 窗口触发，按顺序逐个处理
+- cron 表达式非法时，加载阶段直接 skip 该 schedule
+
 ## Anthropic 转换细节
 
 - System message → Anthropic `system` 字段
@@ -101,6 +182,14 @@ SSE 流中的特殊字段：
 - Anthropic `thinking_delta` → OpenAI `reasoning_content`
 - Anthropic `text_delta` → OpenAI `content`
 - Anthropic `input_json_delta` → OpenAI partial `tool_calls` delta
+
+**已知局限**：`content_block_stop` 事件未处理，导致 Anthropic 流中的 tool_use 完成信号无法映射为 OpenAI 的 `finish_reason="tool_calls"`。当前通过最终的 `message_stop` 事件发送 `finish_reason="stop"` 来结束。该局限已列入未来扩展方向。
+
+## AI 层行为约定
+
+- **Model 参数覆盖**：AI 层收到 body 中的 `model` 字段会被**忽略**，统一替换为启动时配置的 `--model`。这是有意设计——AI 层就是用来隐藏上游 model 细节的
+- **错误透传**：上游返回的非 200 响应，错误信息通过 SSE error JSON 格式透传给下游
+- **SSE 行透传**：openai-completions 模式下上游 SSE 行原样透传（不做格式转换）
 
 ## SessionAgent 支持 TCP URL
 
@@ -125,6 +214,7 @@ SSE 流中的特殊字段：
 - 思考过程（reasoning_content）：`console.print(..., style="dim")`
 - 错误信息：`console.print("[red]Error: ...[/red]")`
 - REPL 欢迎页：`console.print(Panel(...))`
+- **`Console(highlight=False)`**：禁用自动语法高亮，避免 Rich 误把 AI 回复当代码着色
 - **整个仓库不允许 `print()`**——T20 (flake8-print) 规则强制，无 per-file-ignore
 
 ## REPL 约定
@@ -134,6 +224,28 @@ SSE 流中的特殊字段：
 - PS1: `> `，PS2: `. `（同宽对齐）
 - `Ctrl+D` 退出
 
+## 关键注意事项（踩坑经验）
+
+以下是开发过程中遇到的、容易忽略或出错的点：
+
+1. **Socket 文件残留**：进程退出后 `.sock` 文件不会自动删除。重启时必须先 `rm` 或 `unlink()`。测试中 `tmp_path` 自动清理，生产环境需自行管理
+
+2. **`anyio.Path` vs `pathlib.Path`**：两者不兼容。`anyio.Path` 的 IO 方法（`exists()`, `read_text()`, `glob()`）需要 `await`。需要 `pathlib.Path` 时用 `Path(str(anyio_path))` 转换，反之用 `anyio.Path(str(pathlib_path))`
+
+3. **stderr PIPE 阻塞**：`subprocess.PIPE` 必须消费完内容，否则子进程 hang。已全面改用 `anyio.open_process`，其 stderr 为异步流
+
+4. **Subprocess 替代方案**：任何时候都不要在 async 函数中直接调用 `subprocess.Popen` / `subprocess.run` / `time.sleep` / `Path.exists()`。对应替代：
+   | 同步 API | 异步替代 |
+   |----------|----------|
+   | `subprocess.Popen()` | `await anyio.open_process()` |
+   | `subprocess.run()` | `await anyio.run_process()` |
+   | `time.sleep()` | `await anyio.sleep()` |
+   | `Path.exists()` | `await anyio.Path().exists()` |
+
+5. **System prompt 容错**：`system_prompt_builder()` 可能抛异常或返回 None。启动阶段必须 catch 异常，不影响 session 启动（此时 system_prompt 为 None）
+
+6. **Tool 函数必须 awaitable**：`load_tools_from_workspace` 只加载 `async def` 函数。普通函数会被跳过并打印 warning
+
 ## 测试约定
 
 - **框架**: `pytest` + `pytest-asyncio`（`asyncio_mode = "auto"`，anyio backend）
@@ -142,8 +254,28 @@ SSE 流中的特殊字段：
 - **集成测试**: 独立目录 `tests/integration/`，用 `tests/__init__.py` 和 `tests/integration/__init__.py` 使 test 目录成为 package
 - **无需 conftest path hack**: `uv sync` 将 psi-agent 安装为 editable package，`import psi_agent` 直接可用
 - **Mock AI socket**: `aiohttp.web.Application` + `UnixSite`/`SockSite`（获取随机端口用预绑定 socket）
-- **真实 API 测试**: 通过环境变量 `PSI_TEST_*` 注入凭证，未设置时自动 skip
-- **所有 async 操作使用 anyio**: `anyio.open_process` 代替 `subprocess.Popen`，`anyio.Path.exists()` 代替 `pathlib.Path.exists()`，`anyio.sleep()` 代替 `time.sleep()`
+- **真实 API 测试**: 通过环境变量 `PSI_TEST_OPENAI_*` / `PSI_TEST_ANTHROPIC_*` 注入凭证，未设置时自动 skip
+- **所有 async 操作使用 anyio**: 禁止在 async 上下文中直接调用 `subprocess`、`time.sleep`、`pathlib.Path` 方法。详见上方"关键注意事项"第 4 条
+
+### 集成测试 Mock Server
+
+- `MockAIServer` 在 conftest.py 中定义，通过 pytest fixture 提供
+- Mock server **对每个请求返回完全相同的 chunks 列表**。需要 per-request 差异化响应时，使用 inline mock server + `nonlocal` 计数器
+
+示例——per-request 差异化：
+
+```python
+req_count = 0
+async def handler(request):
+    nonlocal req_count
+    req_count += 1
+    if req_count == 1:
+        # 返回 tool_calls
+    else:
+        # 返回最终文本
+```
+
+- 集成测试中 `assert _wait_for_socket()` 会轮询直到 socket 创建。注意 socket 创建 ≠ 服务就绪，需要额外 `await anyio.sleep(0.3)` 确保 accept 就绪
 
 ## Lint / Type Check 约定
 
@@ -152,7 +284,9 @@ SSE 流中的特殊字段：
 - **per-file-ignores**: **零条**。所有代码通过自身符合规则，不靠抑制
 - **仅 2 处 ty:ignore**（无法避免）：
   - `cli.py:29` — tyro.cli() 的 `Annotated[Union[...]]` 类型推断局限
-  - `conftest.py:109` — pytest async generator fixture 的返回类型局限
+  - `conftest.py:109` — pytest async generator fixture 的返回类型局限（`yield` 导致函数被推断为 AsyncGenerator，与标注的 MockAIServer 冲突）
+
+`cast` 不能解决 conftest 的问题——`cast` 是表达式级工具，无法修改 async generator 函数的返回类型。`# ty: ignore` 是正确的标准解法。
 
 ## 类型注解约定
 
