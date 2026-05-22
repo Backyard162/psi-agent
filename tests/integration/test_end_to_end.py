@@ -305,16 +305,39 @@ async def test_multi_turn_history_accumulates(tmp_path: Path) -> None:
     ai_socket = str(tmp_path / "ai.sock")
     channel_socket = str(tmp_path / "channel.sock")
 
-    ai_proc = await anyio.open_process([
-        "uv", "run", "psi-agent", "ai", "openai-completions",
-        "--session-socket", ai_socket, "--model", "test", "--api-key", "k",
-        "--base-url", f"http://127.0.0.1:{port}/v1",
-    ])
-    ses_proc = await anyio.open_process([
-        "uv", "run", "psi-agent", "session",
-        "--workspace", "examples/a-simple-bash-only-workspace",
-        "--channel-socket", channel_socket, "--ai-socket", ai_socket, "--model", "test",
-    ])
+    ai_proc = await anyio.open_process(
+        [
+            "uv",
+            "run",
+            "psi-agent",
+            "ai",
+            "openai-completions",
+            "--session-socket",
+            ai_socket,
+            "--model",
+            "test",
+            "--api-key",
+            "k",
+            "--base-url",
+            f"http://127.0.0.1:{port}/v1",
+        ]
+    )
+    ses_proc = await anyio.open_process(
+        [
+            "uv",
+            "run",
+            "psi-agent",
+            "session",
+            "--workspace",
+            "examples/a-simple-bash-only-workspace",
+            "--channel-socket",
+            channel_socket,
+            "--ai-socket",
+            ai_socket,
+            "--model",
+            "test",
+        ]
+    )
 
     try:
         assert await _wait_for_socket(ai_socket)

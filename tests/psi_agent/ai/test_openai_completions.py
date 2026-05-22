@@ -106,10 +106,9 @@ async def test_server_streaming_response(tmp_path: Path) -> None:
 @pytest.mark.anyio
 async def test_openai_upstream_non_200(tmp_path: Path) -> None:
     """When upstream returns non-200, SSE error is forwarded."""
+
     async def handler(request: web.Request) -> web.StreamResponse:
-        return web.json_response(
-            {"error": {"message": "Invalid API key", "type": "auth", "code": "401"}}, status=401
-        )
+        return web.json_response({"error": {"message": "Invalid API key", "type": "auth", "code": "401"}}, status=401)
 
     app = web.Application()
     app.router.add_post("/v1/chat/completions", handler)
@@ -151,9 +150,7 @@ async def test_openai_upstream_non_200(tmp_path: Path) -> None:
 async def test_openai_unreachable_upstream(tmp_path: Path) -> None:
     """When upstream is unreachable, SSE error with 502 code is returned."""
     socket_path = str(tmp_path / "ai.sock")
-    cfg = OpenAICompletions(
-        session_socket=socket_path, model="test", api_key="k", base_url="http://127.0.0.1:19999/v1"
-    )
+    cfg = OpenAICompletions(session_socket=socket_path, model="test", api_key="k", base_url="http://127.0.0.1:19999/v1")
     try:
         async with anyio.create_task_group() as tg:
             tg.start_soon(cfg.run)

@@ -458,3 +458,9 @@ def main() -> None:
 | Dependabot | `.github/dependabot.yml`（pip + github-actions，weekly） |
 | 最终抑制 | **2 处 ty:ignore**（tyro overload + pytest fixture），**0 ruff noqa**，**0 per-file-ignore** |
 
+### 最终测试覆盖
+
+- **单元测试**: 97 tests（覆盖所有源模块除 `cli.py` 和 channel 客户端）
+- **集成测试**: 32 tests（AI 层、Session 并发/tool/workspace、Channel、端到端）
+- **真实 API 测试**: 4 tests（通过 `PSI_TEST_*` 环境变量注入凭证）
+

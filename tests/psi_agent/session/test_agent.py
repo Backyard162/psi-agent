@@ -259,6 +259,7 @@ async def test_agent_history_accumulation(tmp_path: Path) -> None:
 async def _make_inline_ai_handler(responses: list[dict]):
     """Create an aiohttp handler that returns predefined responses per request."""
     req_count = 0
+
     async def handler(request: web.Request) -> web.StreamResponse:
         nonlocal req_count
         idx = min(req_count, len(responses) - 1)
@@ -268,28 +269,43 @@ async def _make_inline_ai_handler(responses: list[dict]):
         await resp.write(f"data: {json.dumps(responses[idx])}\n\n".encode())
         await resp.write(b"data: [DONE]\n\n")
         return resp
+
     return handler
 
 
 def _tc(name: str, args: str) -> dict:
     return {
-        "id": "mock", "object": "chat.completion.chunk", "created": 0, "model": "test",
-        "choices": [{"index": 0, "delta": {
-            "tool_calls": [{"index": 0, "id": "c1", "type": "function", "function": {"name": name, "arguments": args}}],
-        }, "finish_reason": "tool_calls"}],
+        "id": "mock",
+        "object": "chat.completion.chunk",
+        "created": 0,
+        "model": "test",
+        "choices": [
+            {
+                "index": 0,
+                "delta": {
+                    "tool_calls": [
+                        {"index": 0, "id": "c1", "type": "function", "function": {"name": name, "arguments": args}}
+                    ],
+                },
+                "finish_reason": "tool_calls",
+            }
+        ],
     }
 
 
 def _stop(content: str) -> dict:
     return {
-        "id": "mock", "object": "chat.completion.chunk", "created": 0, "model": "test",
+        "id": "mock",
+        "object": "chat.completion.chunk",
+        "created": 0,
+        "model": "test",
         "choices": [{"index": 0, "delta": {"content": content}, "finish_reason": "stop"}],
     }
 
 
 @pytest.mark.anyio
 async def test_agent_tool_not_registered(tmp_path: Path) -> None:
-    handler = await _make_inline_ai_handler([_tc("unknown", '{}'), _stop("done")])
+    handler = await _make_inline_ai_handler([_tc("unknown", "{}"), _stop("done")])
     app = web.Application()
     app.router.add_post("/v1/chat/completions", handler)
     runner = web.AppRunner(app)
@@ -300,7 +316,9 @@ async def test_agent_tool_not_registered(tmp_path: Path) -> None:
     site = web.SockSite(runner, sock)
     await site.start()
     try:
-        tf = ToolFunction(name="unknown", description="X", parameters={"type": "object", "properties": {}, "required": []})  # noqa: E501
+        tf = ToolFunction(
+            name="unknown", description="X", parameters={"type": "object", "properties": {}, "required": []}
+        )  # noqa: E501
         agent = SessionAgent(ai_socket=f"http://127.0.0.1:{port}/v1", tools={"unknown": tf}, model="test")
         chunks = [c async for c in agent.run({"role": "user", "content": "t"})]
         reasoning = "".join(c.choices[0].delta.reasoning_content or "" for c in chunks if c.choices)
@@ -311,7 +329,7 @@ async def test_agent_tool_not_registered(tmp_path: Path) -> None:
 
 @pytest.mark.anyio
 async def test_agent_tool_throws_exception_unit(tmp_path: Path) -> None:
-    handler = await _make_inline_ai_handler([_tc("crash", '{}'), _stop("recovered")])
+    handler = await _make_inline_ai_handler([_tc("crash", "{}"), _stop("recovered")])
     app = web.Application()
     app.router.add_post("/v1/chat/completions", handler)
     runner = web.AppRunner(app)
@@ -322,11 +340,15 @@ async def test_agent_tool_throws_exception_unit(tmp_path: Path) -> None:
     site = web.SockSite(runner, sock)
     await site.start()
     try:
+
         async def crash_tool() -> str:
             msg = "BOOM"
             raise RuntimeError(msg)
             return ""
-        tf = ToolFunction(name="crash", description="X", parameters={"type": "object", "properties": {}, "required": []})  # noqa: E501
+
+        tf = ToolFunction(
+            name="crash", description="X", parameters={"type": "object", "properties": {}, "required": []}
+        )  # noqa: E501
         agent = SessionAgent(ai_socket=f"http://127.0.0.1:{port}/v1", tools={"crash": tf}, model="test")
         agent.register_tool_func("crash", crash_tool)
         chunks = [c async for c in agent.run({"role": "user", "content": "t"})]
@@ -338,7 +360,7 @@ async def test_agent_tool_throws_exception_unit(tmp_path: Path) -> None:
 
 @pytest.mark.anyio
 async def test_agent_tool_returns_int(tmp_path: Path) -> None:
-    handler = await _make_inline_ai_handler([_tc("int_tool", '{}'), _stop("done")])
+    handler = await _make_inline_ai_handler([_tc("int_tool", "{}"), _stop("done")])
     app = web.Application()
     app.router.add_post("/v1/chat/completions", handler)
     runner = web.AppRunner(app)
@@ -349,9 +371,13 @@ async def test_agent_tool_returns_int(tmp_path: Path) -> None:
     site = web.SockSite(runner, sock)
     await site.start()
     try:
+
         async def int_tool() -> int:
             return 42
-        tf = ToolFunction(name="int_tool", description="X", parameters={"type": "object", "properties": {}, "required": []})  # noqa: E501
+
+        tf = ToolFunction(
+            name="int_tool", description="X", parameters={"type": "object", "properties": {}, "required": []}
+        )  # noqa: E501
         agent = SessionAgent(ai_socket=f"http://127.0.0.1:{port}/v1", tools={"int_tool": tf}, model="test")
         agent.register_tool_func("int_tool", int_tool)
         chunks = [c async for c in agent.run({"role": "user", "content": "t"})]
@@ -367,6 +393,7 @@ async def test_agent_tool_returns_int(tmp_path: Path) -> None:
 @pytest.mark.anyio
 async def test_agent_tcp_connector(tmp_path: Path) -> None:
     """Agent should work with http:// TCP URL for ai_socket."""
+
     async def handler(request: web.Request) -> web.StreamResponse:
         resp = web.StreamResponse(status=200, reason="OK", headers={"Content-Type": "text/event-stream"})
         await resp.prepare(request)
@@ -396,6 +423,7 @@ async def test_agent_tcp_connector(tmp_path: Path) -> None:
 @pytest.mark.anyio
 async def test_agent_ai_non_200_response(tmp_path: Path) -> None:
     """AI returning non-200 should yield an error chunk."""
+
     async def handler(request: web.Request) -> web.StreamResponse:
         return web.json_response({"error": "bad request"}, status=400)
 
@@ -420,6 +448,7 @@ async def test_agent_ai_non_200_response(tmp_path: Path) -> None:
 @pytest.mark.anyio
 async def test_agent_non_data_sse_line(tmp_path: Path) -> None:
     """SSE lines not starting with 'data: ' should be skipped."""
+
     async def handler(request: web.Request) -> web.StreamResponse:
         resp = web.StreamResponse(status=200, reason="OK", headers={"Content-Type": "text/event-stream"})
         await resp.prepare(request)
@@ -427,7 +456,9 @@ async def test_agent_non_data_sse_line(tmp_path: Path) -> None:
         await resp.write(b"event: ping\ndata: {}\n\n")
         await resp.write(
             b"data: "
-            + json.dumps({"id": "t", "choices": [{"delta": {"content": "after event"}, "finish_reason": "stop"}]}).encode()  # noqa: E501
+            + json.dumps(
+                {"id": "t", "choices": [{"delta": {"content": "after event"}, "finish_reason": "stop"}]}
+            ).encode()  # noqa: E501
             + b"\n\n"
         )
         await resp.write(b"data: [DONE]\n\n")
@@ -454,13 +485,12 @@ async def test_agent_non_data_sse_line(tmp_path: Path) -> None:
 @pytest.mark.anyio
 async def test_agent_empty_content_stop(tmp_path: Path) -> None:
     """AI returning stop with no content should not crash."""
+
     async def handler(request: web.Request) -> web.StreamResponse:
         resp = web.StreamResponse(status=200, reason="OK", headers={"Content-Type": "text/event-stream"})
         await resp.prepare(request)
         await resp.write(
-            b"data: "
-            + json.dumps({"id": "t", "choices": [{"delta": {}, "finish_reason": "stop"}]}).encode()
-            + b"\n\n"
+            b"data: " + json.dumps({"id": "t", "choices": [{"delta": {}, "finish_reason": "stop"}]}).encode() + b"\n\n"
         )
         await resp.write(b"data: [DONE]\n\n")
         return resp

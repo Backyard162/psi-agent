@@ -102,6 +102,7 @@ def test_schedule_pending_response() -> None:
     assert s.pending_response is None
     assert not s.has_pending
 
+
 # --- Missing coverage tests ---
 
 

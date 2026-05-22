@@ -200,6 +200,7 @@ def test_error_response_to_json() -> None:
     assert data["error"]["type"] == "internal_error"
     assert data["error"]["code"] == "500"
 
+
 # --- Missing coverage tests ---
 
 
@@ -290,12 +291,15 @@ def test_parse_param_descriptions_multiline() -> None:
 
 def test_chat_completion_chunk_to_dict_direct() -> None:
     chunk = ChatCompletionChunk(
-        id="c1", model="test",
-        choices=[StreamChoice(
-            index=0,
-            delta=DeltaMessage(content="ok", reasoning_content="think"),
-            finish_reason="stop",
-        )],
+        id="c1",
+        model="test",
+        choices=[
+            StreamChoice(
+                index=0,
+                delta=DeltaMessage(content="ok", reasoning_content="think"),
+                finish_reason="stop",
+            )
+        ],
     )
     d = chunk.to_dict()
     assert d["id"] == "c1"
