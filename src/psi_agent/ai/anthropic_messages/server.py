@@ -169,32 +169,40 @@ async def handle_chat_completions(request: web.Request) -> web.StreamResponse:
             if upstream_resp.status != 200:
                 error_text = await upstream_resp.text()
                 logger.error(f"Upstream error: {error_text[:500]}")
-                err_data = json.dumps(
+                err_chunk = json.dumps(
                     {
-                        "error": {
-                            "message": f"Upstream error: {error_text[:200]}",
-                            "type": "upstream_error",
-                            "code": str(upstream_resp.status),
-                        }
+                        "id": "error",
+                        "model": "",
+                        "choices": [
+                            {
+                                "index": 0,
+                                "delta": {"content": f"[Upstream Error {upstream_resp.status}]: {error_text[:300]}"},
+                                "finish_reason": "error",
+                            }
+                        ],
                     }
                 )
-                await response.write(f"data: {err_data}\n\n".encode())
+                await response.write(f"data: {err_chunk}\n\n".encode())
                 await response.write(b"data: [DONE]\n\n")
                 return response
 
             await _convert_anthropic_stream_to_openai_sse(response, upstream_resp.content)
     except Exception as e:
         logger.error(f"Error forwarding to upstream: {e}")
-        err_data = json.dumps(
+        err_chunk = json.dumps(
             {
-                "error": {
-                    "message": str(e),
-                    "type": "upstream_connection",
-                    "code": "502",
-                }
+                "id": "error",
+                "model": "",
+                "choices": [
+                    {
+                        "index": 0,
+                        "delta": {"content": f"[Upstream Connection Error]: {e}"},
+                        "finish_reason": "error",
+                    }
+                ],
             }
         )
-        await response.write(f"data: {err_data}\n\n".encode())
+        await response.write(f"data: {err_chunk}\n\n".encode())
         await response.write(b"data: [DONE]\n\n")
         return response
 

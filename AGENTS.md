@@ -102,10 +102,18 @@ SSE 流中的特殊字段：
 - `delta.reasoning_content` — 聚合了 AI thinking + tool_call 意图 + tool_call 结果
 - `delta.tool_calls` — 部分 tool call 定义（流式累积）
 
-错误响应格式（OpenAI 风格）：
-```json
-{"error": {"message": "...", "type": "...", "code": "..."}}
-```
+错误响应有两种形式：
+
+1. **非流式（HTTP 层面）**：请求解析失败等，在 `response.prepare()` 之前返回
+   ```json
+   {"error": {"message": "...", "type": "...", "code": "..."}}
+   ```
+
+2. **流式（SSE 层面）**：已 commit HTTP 200 后发生的错误（上游异常、连接断开等），使用 ChatCompletionChunk 格式
+   ```json
+   {"id": "error", "choices": [{"index": 0, "delta": {"content": "[Upstream Error 401]: ..."}, "finish_reason": "error"}]}
+   ```
+   所有层统一使用 `finish_reason="error"` 标记流式错误，Session 检测到后不写入 conversation history。
 
 ## Agent Loop 逻辑
 
