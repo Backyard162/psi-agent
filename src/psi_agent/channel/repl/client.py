@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import sys
 
-from aiohttp import ClientConnectorError, ClientSession, UnixConnector
+from aiohttp import ClientConnectorError, ClientSession, ClientTimeout, UnixConnector
 from loguru import logger
 from prompt_toolkit.shortcuts import PromptSession
 from rich.console import Console
@@ -19,7 +19,7 @@ async def run_repl(session_socket: str) -> None:
     prompt_session = PromptSession(multiline=True)
 
     try:
-        async with ClientSession(connector=connector) as session:
+        async with ClientSession(connector=connector, timeout=ClientTimeout(total=None)) as session:
             logger.info("Connected to session. Enter for newline, Alt+Enter to send (Ctrl+D to exit).")
             console.print(Panel.fit("psi-agent REPL — Enter newline, Alt+Enter send"))
             console.print("[dim]Ctrl+D to exit[/dim]\n")

@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import sys
 
-from aiohttp import ClientSession, UnixConnector
+from aiohttp import ClientSession, ClientTimeout, UnixConnector
 from loguru import logger
 from rich.console import Console
 
@@ -16,7 +16,7 @@ async def run_cli(*, session_socket: str, message: str) -> None:
     connector = UnixConnector(path=session_socket)
 
     try:
-        async with ClientSession(connector=connector) as session:
+        async with ClientSession(connector=connector, timeout=ClientTimeout(total=None)) as session:
             req_data = {
                 "model": "psi-agent",
                 "messages": [{"role": "user", "content": message}],

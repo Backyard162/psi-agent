@@ -4,7 +4,7 @@ import json
 from typing import Any
 
 import anyio
-from aiohttp import ClientSession, TCPConnector, web
+from aiohttp import ClientSession, ClientTimeout, TCPConnector, web
 from loguru import logger
 
 from psi_agent.protocol import ErrorResponse
@@ -162,7 +162,7 @@ async def handle_chat_completions(request: web.Request) -> web.StreamResponse:
     try:
         use_ssl = base_url.startswith("https")
         async with (
-            ClientSession(connector=TCPConnector(ssl=use_ssl)) as session,
+            ClientSession(connector=TCPConnector(ssl=use_ssl), timeout=ClientTimeout(total=None)) as session,
             session.post(upstream_url, json=request_body, headers=headers) as upstream_resp,
         ):
             logger.info(f"Upstream response status: {upstream_resp.status}")

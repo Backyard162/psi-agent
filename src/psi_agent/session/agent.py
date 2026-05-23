@@ -4,7 +4,7 @@ import json
 from collections.abc import AsyncIterator
 from typing import Any
 
-from aiohttp import ClientSession, TCPConnector, UnixConnector
+from aiohttp import ClientSession, ClientTimeout, TCPConnector, UnixConnector
 from loguru import logger
 
 from psi_agent.protocol import ChatCompletionChunk, DeltaMessage, StreamChoice, ToolFunction
@@ -212,7 +212,7 @@ class SessionAgent:
             connector = UnixConnector(path=self.ai_socket)
             endpoint = "http://localhost/v1/chat/completions"
         async with (
-            ClientSession(connector=connector) as session,
+            ClientSession(connector=connector, timeout=ClientTimeout(total=None)) as session,
             session.post(endpoint, json=request_body) as resp,
         ):
             logger.info(f"AI response status: {resp.status}")

@@ -129,7 +129,6 @@ SSE 流中的特殊字段：
    - finish_reason="tool_calls" → 执行 tool → 结果追加到 history → 回到步骤 5
    - finish_reason="stop" → 最终 content 追加到 history → 释放锁
 7. 最多 10 轮 tool call
-8. 5 分钟超时保护（`anyio.fail_after(300)`）：若 AI 无响应则自动断开并发送 `[Session Timeout]`
 
 **注意**：
 - Channel 不发送 history。每次请求只带最新一条 user message，Session 自己维护完整 history。
