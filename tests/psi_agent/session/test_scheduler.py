@@ -104,6 +104,14 @@ def test_parse_yaml_header_error() -> None:
     assert body == content
 
 
+def test_parse_yaml_header_success() -> None:
+    """parse_yaml_header correctly extracts YAML front matter and separates body."""
+    content = "---\nname: daily-report\ncron: '0 12 * * *'\n---\n请生成日报。"
+    header, body = parse_yaml_header(content)
+    assert header == {"name": "daily-report", "cron": "0 12 * * *"}
+    assert body == "请生成日报。"
+
+
 def test_schedule_invalid_cron_raises() -> None:
 
     with pytest.raises(ValueError):
