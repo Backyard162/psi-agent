@@ -190,7 +190,9 @@ def test_openai_cli_overrides_env(monkeypatch) -> None:
     monkeypatch.setenv("OPENAI_MODEL", "gpt-from-env")
     monkeypatch.setenv("OPENAI_BASE_URL", "https://env.example.com/v1")
 
-    config = OpenAICompletions(session_socket="/tmp/s.sock", model="gpt-from-cli", base_url="https://cli.example.com/v1")
+    config = OpenAICompletions(
+        session_socket="/tmp/s.sock", model="gpt-from-cli", base_url="https://cli.example.com/v1"
+    )
     assert config.model == "gpt-from-cli"
     assert config.base_url == "https://cli.example.com/v1"
 

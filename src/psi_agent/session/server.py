@@ -75,11 +75,11 @@ async def handle_chat_completions(request: web.Request) -> web.StreamResponse:
         logger.info("Acquired session lock, processing request")
         try:
             async for chunk in agent.run(user_message):
-                    await response.write(chunk.to_sse().encode())
-                    logger.debug(
-                        f"Chunk sent: content={chunk.choices[0].delta.content!r}, "
-                        f"reasoning={chunk.choices[0].delta.reasoning_content!r}"
-                    )
+                await response.write(chunk.to_sse().encode())
+                logger.debug(
+                    f"Chunk sent: content={chunk.choices[0].delta.content!r}, "
+                    f"reasoning={chunk.choices[0].delta.reasoning_content!r}"
+                )
         except Exception as e:
             logger.error(f"Error in agent run: {e}")
             err_chunk = ChatCompletionChunk(

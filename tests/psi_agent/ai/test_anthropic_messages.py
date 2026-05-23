@@ -444,5 +444,7 @@ def test_anthropic_cli_overrides_env(monkeypatch) -> None:
     """CLI args should take precedence over env vars."""
     monkeypatch.setenv("ANTHROPIC_MODEL", "claude-from-env")
 
-    config = AnthropicMessages(session_socket="/tmp/s.sock", model="claude-from-cli", base_url="https://cli.example.com")
+    config = AnthropicMessages(
+        session_socket="/tmp/s.sock", model="claude-from-cli", base_url="https://cli.example.com"
+    )
     assert config.model == "claude-from-cli"

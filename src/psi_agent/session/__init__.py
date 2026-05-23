@@ -64,9 +64,7 @@ async def _run_one_schedule(schedule: Schedule, agent: SessionAgent, lock: anyio
                     async for chunk in agent.run(msg):
                         pending_chunks.append(chunk)
                     agent.set_pending_schedule_chunks(pending_chunks)
-                    logger.info(
-                        f"Schedule {schedule.name} response stored ({len(pending_chunks)} chunks)"
-                    )
+                    logger.info(f"Schedule {schedule.name} response stored ({len(pending_chunks)} chunks)")
         except Exception as e:
             logger.error(f"Error processing schedule {schedule.name}: {e}")
 
