@@ -26,16 +26,16 @@ Session ── POST /chat/completions ──► AI (Unix socket)
 
 | 文件 | 职责 |
 |------|------|
-| `__init__.py` | `AiBackend` dataclass + `run()` + `serve_ai_backend()` |
+| `__init__.py` | `Ai` dataclass + `run()` + `serve_ai()` |
 
 | `server.py` | `handle_chat_completions()` — 请求处理 |
 
 ## 数据流
 
 ```
-1. CLI → AiBackend.run()
-2. run() → serve_ai_backend(provider, model, api_key, base_url, handler)
-3. serve_ai_backend → aiohttp UnixSite + 注册 handler
+1. CLI → Ai.run()
+2. run() → serve_ai(provider, model, api_key, base_url, handler)
+3. serve_ai → aiohttp UnixSite + 注册 handler
 4. 请求到达 → handle_chat_completions()
 5. 解析 body → await any_llm.acompletion(provider=..., stream=True, ...)
 6. async for chunk → chunk.model_dump_json() → SSE write

@@ -54,7 +54,7 @@ src/
     ├── _logging.py              # loguru 配置，verbose→DEBUG
     ├── ai/
     │   ├── AGENTS.md                # AI 层设计文档
-    │   ├── __init__.py               # AiBackend + serve_ai_backend
+    │   ├── __init__.py               # Ai + serve_ai
     │   └── server.py                 # handler（请求处理）
     ├── session/
     │   ├── AGENTS.md                # Session 层设计文档

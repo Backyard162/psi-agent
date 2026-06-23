@@ -15,7 +15,7 @@ from psi_agent._logging import setup_logging
 from .server import handle_chat_completions
 
 
-async def serve_ai_backend(
+async def serve_ai(
     *,
     socket_path: str,
     provider: str,
@@ -50,7 +50,7 @@ async def serve_ai_backend(
 
 
 @dataclass
-class AiBackend:
+class Ai:
     """Start an AI backend service that forwards to any LLM provider."""
 
     session_socket: str
@@ -78,7 +78,7 @@ class AiBackend:
         api_key = self.api_key or os.environ.get("PSI_AI_API_KEY", "")
         base_url = self.base_url or os.environ.get("PSI_AI_BASE_URL", "")
         setup_logging(verbose=self.verbose)
-        await serve_ai_backend(
+        await serve_ai(
             socket_path=self.session_socket,
             provider=provider,
             model=model,

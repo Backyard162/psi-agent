@@ -196,13 +196,13 @@ git add psi_agent/_logging.py tests/psi_agent/test__logging.py && git commit -m 
 
 ### Task 4: AI 层 — 统一后端（原 openai-completions + anthropic-messages）
 
-> ⚠️ v0.3.0 已替换为单一 `AiBackend`（见"后续质量改进"）
+> ⚠️ v0.3.0 已替换为单一 `Ai`（见"后续质量改进"）
 
 **Files (原):** `psi_agent/ai/openai_completions/`, `psi_agent/ai/anthropic_messages/`
 
 **Files (现):** `psi_agent/ai/__init__.py`, `psi_agent/ai/common.py`, `psi_agent/ai/server.py`
 
-**Dataclass:** `AiBackend(session_socket, provider, model, api_key, base_url, verbose)` with `async run()`
+**Dataclass:** `Ai(session_socket, provider, model, api_key, base_url, verbose)` with `async run()`
 
 **Server:** 使用 [any-llm-sdk](https://github.com/mozilla-ai/any-llm) 的 `acompletion()` 转发到上游，支持 50+ provider，Anthropic→OpenAI SSE 格式转换自动处理。
 
@@ -300,15 +300,11 @@ aiohttp Unix socket server 监听 `channel_socket`:
 from tyro import conf
 from typing import Annotated
 
-from psi_agent.ai import AiBackend
+from psi_agent.ai import Ai
 from psi_agent.session import Session
 from psi_agent.channel.repl import ChannelRepl
 from psi_agent.channel.cli import ChannelCli
 
-AiGroup = Annotated[
-    AiBackend,
-    conf.subcommand(name="ai", description="AI backend services"),
-]
 ChannelGroup = Annotated[
     ChannelRepl | ChannelCli,
     conf.subcommand(name="channel", description="User interface channels"),
@@ -316,7 +312,7 @@ ChannelGroup = Annotated[
 
 def main() -> None:
     import anyio
-    cmd = tyro.cli(Session | AiGroup | ChannelGroup)
+    cmd = tyro.cli(Session | Ai | ChannelGroup)
     anyio.run(cmd.run)
 ```
 
@@ -446,7 +442,7 @@ def main() -> None:
 | 最终抑制 | **2 处 ty:ignore**（tyro overload + pytest fixture），**0 ruff noqa**，**0 per-file-ignore** |
 | 并发/调度重构 | FIFO 排队替代 503、每 schedule 独立 anyio task、去重 _yaml.py、统一 SSE 错误格式、CLI 环境变量支持（model/base_url/api_key）、`response.prepare()` 移入 lock、Socket 手动清理策略 |
 | AI 层抽象 | `SSEChunk` dataclass 替代 `build_error_sse_chunk` + anthropic 中 4 处裸 dict（7 个构造点 → 统一类型）；`serve_ai_backend()` 消除两个 `serve_*` 函数的 30 行重复 |
-| AI 后端统一 | 采用 Mozilla any-llm-sdk，删除 `openai_completions/` 和 `anthropic_messages/` 子包（~500 行手写转换），单一 `AiBackend` 支持 50+ provider；净减 700 行 |
+| AI 后端统一 | 采用 Mozilla any-llm-sdk，删除 `openai_completions/` 和 `anthropic_messages/` 子包（~500 行手写转换），单一 `Ai` 支持 50+ provider；净减 700 行 |
 
 ### 最终测试覆盖
 
@@ -468,4 +464,4 @@ def main() -> None:
 | 2026-05-24 | v0.2.1 | 内部模块规范化：`logging.py` → `_logging.py`、`protocol.py` → `_protocol.py` |
 | 2026-05-24 | v0.2.2 | 协议类型拆分：`_protocol.py` 拆为 `session/protocol.py` + `ai/common.py`，ErrorResponse 独立实现，提取 `build_error_sse_chunk` |
 | 2026-05-24 | v0.2.3 | AI 层抽象：`SSEChunk` dataclass 替代 `build_error_sse_chunk` + 4 处裸 dict；`serve_ai_backend()` 消除两个 `serve_*` 的 15 行重复 |
-| 2026-06-17 | v0.3.0 | 统一 AI 后端：采用 any-llm-sdk，删除 `openai_completions/` 和 `anthropic_messages/` 子包，单一 `AiBackend` 支持 50+ provider |
+| 2026-06-17 | v0.3.0 | 统一 AI 后端：采用 any-llm-sdk，删除 `openai_completions/` 和 `anthropic_messages/` 子包，单一 `Ai` 支持 50+ provider |
