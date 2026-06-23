@@ -11,6 +11,7 @@ from aiohttp.typedefs import Handler
 from loguru import logger
 
 from psi_agent._logging import setup_logging
+from psi_agent._socket import create_site
 
 from .server import handle_chat_completions
 
@@ -37,7 +38,7 @@ async def serve_ai(
 
     runner = web.AppRunner(app)
     await runner.setup()
-    site = web.UnixSite(runner, socket_path)
+    site = create_site(runner, socket_path)
     await site.start()
 
     logger.info(f"AI listening on {socket_path}")

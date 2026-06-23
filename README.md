@@ -15,7 +15,7 @@
 ## 架构
 
 ```
-用户 ←→ Channel (REPL/CLI) ──Unix socket── Session ──Unix socket── AI (OpenAI/Anthropic)
+ 用户 ←→ Channel (REPL/CLI) ── TCP/Unix/Named Pipe ── Session ── TCP/Unix/Named Pipe ── AI
 ```
 
 ## 快速开始

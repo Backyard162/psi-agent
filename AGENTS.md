@@ -9,7 +9,7 @@ psi-agent 是一个**微内核**式的 agent 框架。核心理念是：
 1. **最小化核心**: 框架本身只提供通信协议、组件组合和 tool/Schedule 加载机制
 2. **功能由 workspace 定义**: agent 的能力（tools、system prompt、定时任务）完全由 workspace 目录中的文件定义
 3. **组件无状态**: AI 后端不保存任何状态；Session 只维护一个内存中的 history；Channel 不管理历史
-4. **组合优于继承**: 三个独立组件通过 Unix socket 任意组合
+4. **组合优于继承**: 三个独立组件通过 socket 任意组合
 5. **一切异步**: 所有 IO 操作使用 `anyio`，永不使用 `asyncio` 原生 API 或 `pathlib`
 6. **零抑制**: 不堆 `noqa`，不设 `per-file-ignores`。代码本身应符合规则
 7. **显式单 choice 模型**: Session 和 AI 之间每 SSE chunk 保证恰好 1 个 choice。多 choice 作为错误处理，0 choice 静默跳过（心跳）
@@ -38,7 +38,7 @@ JSONL 格式零依赖，逐行追加读写简单。文件按 `workspace/historie
 | 领域 | 技术 |
 |------|------|
 | 异步 | `anyio`（禁止使用 `asyncio` 原生 API、`pathlib`） |
-| HTTP | `aiohttp`（Unix socket + TCP） |
+| HTTP | `aiohttp`（Unix socket / TCP / Named Pipe） |
 | CLI | `tyro`（Union dataclasses + 嵌套子命令） |
 | REPL | `prompt-toolkit`（multiline async prompt）+ `rich`（终端格式化） |
 | 日志 | `loguru` |
@@ -55,6 +55,7 @@ src/
 └── psi_agent/
     ├── cli.py                  # tyro CLI 入口，定义 top-level Union
     ├── _yaml.py               # 共享 YAML header 解析（scheduler + workspace system.py）
+    ├── _socket.py              # 共享 socket 工具（prefix-based transport 解析）
     ├── _logging.py              # loguru 配置，verbose→DEBUG
     ├── ai/
     │   ├── AGENTS.md                # AI 层设计文档
@@ -63,7 +64,7 @@ src/
     ├── session/
     │   ├── AGENTS.md                # Session 层设计文档
     │   ├── __init__.py             # Session dataclass + run()，入口编排
-    │   ├── server.py               # serve_session — aiohttp Unix socket 脚手架
+    │   ├── server.py               # serve_session — aiohttp HTTP/SSE scaffold
     │   ├── agent.py                # SessionAgent — history + agent loop + tool exec + handler + persistence
     │   ├── protocol.py             # Session 层协议类型（ChatCompletionChunk 等）
     │   ├── tools.py                # workspace tools 加载（async anyio.Path）
@@ -83,7 +84,7 @@ src/
 
 ## 核心通信协议
 
-所有组件通过 **aiohttp Unix socket** 以 **OpenAI Chat Completions HTTP/SSE** 格式通信：
+所有组件通过 **aiohttp** 以 **OpenAI Chat Completions HTTP/SSE** 格式通信。传输支持 Unix socket、TCP、Windows Named Pipe，由地址前缀自动检测（`psi_agent._socket`）：
 
 - **AI socket**: Session 作为客户端访问，`POST /chat/completions`
 - **Channel socket**: Session 作为服务端，`POST /chat/completions`

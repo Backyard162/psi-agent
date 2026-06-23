@@ -14,6 +14,7 @@ import anyio
 from aiohttp import web
 from loguru import logger
 
+from psi_agent._socket import resolve_connector_and_endpoint
 from psi_agent.session.protocol import ChatCompletionChunk, DeltaMessage, StreamChoice, ToolFunction
 from psi_agent.session.scheduler import load_schedules_from_workspace
 from psi_agent.session.tools import load_tools_from_workspace
@@ -329,23 +330,8 @@ class SessionAgent:
             )
 
     def _build_connector_and_endpoint(self) -> tuple[aiohttp.BaseConnector, str]:
-        """Resolve self.ai_socket to an aiohttp connector and HTTP endpoint.
-
-        Supported transports:
-        - ``http(s)://host:port`` → TCPConnector
-        - ``\\\\.\\pipe\\name`` → NamedPipeConnector (Windows only)
-        - bare filesystem path  → UnixConnector
-        """
-        if self.ai_socket.startswith(("http://", "https://")):
-            connector = aiohttp.TCPConnector(ssl=self.ai_socket.startswith("https://"))
-            endpoint = self.ai_socket.rstrip("/") + "/chat/completions"
-        elif self.ai_socket.startswith("\\\\.\\pipe\\"):
-            connector = aiohttp.NamedPipeConnector(path=self.ai_socket)
-            endpoint = "http://localhost/chat/completions"
-        else:
-            connector = aiohttp.UnixConnector(path=self.ai_socket)
-            endpoint = "http://localhost/chat/completions"
-        return connector, endpoint
+        """Resolve self.ai_socket to an aiohttp connector and HTTP endpoint."""
+        return resolve_connector_and_endpoint(self.ai_socket)
 
     async def _stream_ai_request(self, request_body: dict) -> AsyncIterator[ChatCompletionChunk]:
         """Send a request to the AI backend and yield parsed SSE chunks.

@@ -260,7 +260,7 @@ git add psi_agent/_logging.py tests/psi_agent/test__logging.py && git commit -m 
 
 **Files:** `psi_agent/session/server.py`, `psi_agent/session/__init__.py` (更新)
 
-aiohttp Unix socket server 监听 `channel_socket`:
+aiohttp HTTP/SSE server 监听 `channel_socket`（支持 Unix/TCP/Named Pipe）：
 - `POST /chat/completions`: 解析请求，用 `SessionAgent.run()` 处理，SSE 流式返回
 - 用 `anyio.Lock` 确保单请求，后续请求 FIFO 排队
 - 请求 body 中的 messages 只取最后一条 user 消息
@@ -274,7 +274,7 @@ aiohttp Unix socket server 监听 `channel_socket`:
 **Files:** `psi_agent/channel/__init__.py`, `psi_agent/channel/repl/__init__.py`, `psi_agent/channel/repl/client.py`, `tests/psi_agent/channel/test_repl.py`
 
 `ChannelRepl.run()`:
-1. 连接 `session_socket` Unix socket
+1. 连接 `session_socket`（支持 Unix/TCP/Named Pipe）
 2. 交互式循环：显示 `> `，读取行
 3. `POST /chat/completions`（不发送 history）
 4. SSE 流式读取，实时打印 reasoning_content（dimmed）和 content
@@ -426,7 +426,7 @@ def main() -> None:
 | `SockSite` 替换 `TCPSite._server` | 测试中通过预绑定 socket 获取随机端口，消除 `unresolved-attribute` |
 | Dev deps 补充 | 添加 `ty>=0.0.38` 类型检查、`prompt-toolkit>=3.0` 异步 REPL |
 | Ruff 规则扩展 | select 从 7 组扩展到 11 组：加 `B`、`RUF`、`N`、`T20` |
-| SessionAgent TCP 支持 | ai_socket 参数同时支持 Unix socket 路径和 `http://` URL |
+| SessionAgent 传输支持 | ai_socket 参数支持 Unix socket 路径、`http(s)://` URL、`\\\\.\\pipe\\` Named Pipe |
 
 ## 后续质量改进
 

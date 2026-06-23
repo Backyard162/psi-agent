@@ -47,13 +47,14 @@ psi/
 │   ├── __init__.py
 │   ├── cli.py                      # tyro CLI 入口
 │   ├── _yaml.py                    # 共享 YAML header 解析
+│   ├── _socket.py                  # 共享 socket 工具（prefix-based transport 解析）
 │   ├── _logging.py                  # loguru 配置
 │   ├── ai/  (统一多 provider，基于 any-llm-sdk)
 │   │   ├── __init__.py
-│   │       └── server.py           # aiohttp Unix socket server + thinking 转换
+│   │       └── server.py           # aiohttp HTTP/SSE handler
 │   ├── session/
 │   │   ├── __init__.py             # Session dataclass + run()
-│   │   ├── server.py               # aiohttp Unix socket server（channel 端）
+│   │   ├── server.py               # aiohttp HTTP/SSE server（channel 端）
 │   │   ├── agent.py                # 核心 agent loop + history 持久化
 │   │   ├── protocol.py             # 协议类型（ToolFunction, ChatCompletionChunk 等）
 │   │   ├── tools.py                # 从 tools/*.py 加载 tool 函数
@@ -142,7 +143,7 @@ Channel (REPL/CLI)          Session                     AI (OpenAI/Anthropic)
      │                         │ 释放锁                       │
 ```
 
-**通信协议**：所有 socket 端点使用标准 HTTP/SSE（OpenAI Chat Completions 兼容格式），通过 aiohttp 的 Unix socket 支持。
+**通信协议**：所有 socket 端点使用标准 HTTP/SSE（OpenAI Chat Completions 兼容格式），支持 Unix socket、TCP、Windows Named Pipe。传输类型由地址前缀自动检测：`http(s)://` → TCP，`\\\\.\\pipe\\` → Named Pipe，裸路径 → Unix socket。检测逻辑位于 `psi_agent._socket`。
 
 **错误响应格式**（两种形式）：
 
@@ -163,11 +164,11 @@ Channel (REPL/CLI)          Session                     AI (OpenAI/Anthropic)
 
 ## 5. AI 层
 
-AI 层是一个统一的多 provider LLM 客户端，通过 Unix socket 对外提供 OpenAI-compatible HTTP/SSE 服务。基于 [any-llm-sdk](https://github.com/mozilla-ai/any-llm) 支持 50+ LLM provider，含 Anthropic→OpenAI SSE 格式自动转换。
+AI 层是一个统一的多 provider LLM 客户端，对外提供 OpenAI-compatible HTTP/SSE 服务。基于 [any-llm-sdk](https://github.com/mozilla-ai/any-llm) 支持 50+ LLM provider，含 Anthropic→OpenAI SSE 格式自动转换。
 
 
 - **错误处理**：HTTP 层返回 OpenAI 格式 `{"error": {...}}` JSON；SSE 层使用 ChatCompletionChunk + `finish_reason="error"`
-- **`serve_ai()`**：Unix socket 服务器脚手架
+- **`serve_ai()`**：HTTP/SSE 服务器脚手架
 
 ### 5.1 Ai
 
@@ -318,7 +319,7 @@ class ChannelRepl:
 ```
 
 **行为**：
-- 连接 `session_socket`（aiohttp Unix socket 客户端）
+- 连接 `session_socket`（aiohttp，支持 Unix/TCP/Named Pipe）
 - 交互式 REPL 循环：
   - 显示 `> ` 提示符，读取用户输入
   - `POST /chat/completions` 发送消息（不含 history）
@@ -536,4 +537,4 @@ cron: "0 12 * * *"
 | 2026-05-24 | v0.2.1 | 内部模块规范化：`logging.py` → `_logging.py`、`protocol.py` → `_protocol.py` |
 | 2026-05-24 | v0.2.3 | AI 层抽象：`SSEChunk` dataclass 替代裸 dict 构造 + `serve_ai_backend()` 消除 serve 重复 |
 | 2026-06-17 | v0.3.0 | 统一 AI 后端：采用 any-llm-sdk 替代手写 Anthropic→OpenAI 转换，单一 `Ai` 支持 50+ provider |
-| 2026-06-24 | v0.4.0 | Session 全面重构：协议类型内联、tool 加载通用化、schedule 纯配置化、参数透传、单 choice 强制、history JSONL 持久化、Interleaved CoT 支持 |
+| 2026-06-24 | v0.4.0 | Session 全面重构：协议类型内联、tool 加载通用化、schedule 纯配置化、参数透传、单 choice 强制、history JSONL 持久化、Interleaved CoT 支持、socket 传输统一（Unix/TCP/Named Pipe） |

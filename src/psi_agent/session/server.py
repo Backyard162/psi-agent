@@ -5,6 +5,8 @@ from aiohttp import web
 from aiohttp.typedefs import Handler
 from loguru import logger
 
+from psi_agent._socket import create_site
+
 
 async def serve_session(
     *,
@@ -20,7 +22,7 @@ async def serve_session(
 
     runner = web.AppRunner(app)
     await runner.setup()
-    site = web.UnixSite(runner, channel_socket)
+    site = create_site(runner, channel_socket)
     await site.start()
 
     logger.info(f"Session server listening on {channel_socket}")

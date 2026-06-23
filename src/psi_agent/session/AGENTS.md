@@ -58,10 +58,17 @@ Session 层是 psi-agent 的核心——负责 workspace 解析、agent loop、t
 
 ## SessionAgent 支持多种传输
 
-`SessionAgent.ai_socket` 支持三种传输协议：
-- `http(s)://host:port` → TCP（`TCPConnector`）
-- `\\\\.\\pipe\\name` → Windows Named Pipe（`NamedPipeConnector`）
-- 裸文件系统路径 → Unix domain socket（`UnixConnector`）
+所有组件通过前缀自动检测传输协议（实现位于 `psi_agent._socket`）：
+
+客户端（`resolve_connector_and_endpoint`）：
+- `http(s)://host:port` → `TCPConnector`
+- `\\\\.\\pipe\\name` → `NamedPipeConnector`（Windows only）
+- 裸文件系统路径 → `UnixConnector`
+
+服务器端（`create_site`）：
+- `http(s)://host:port` → `TCPSite`
+- `\\\\.\\pipe\\name` → `NamedPipeSite`（Windows only）
+- 裸文件系统路径 → `UnixSite`
 
 ## Tool 加载约定
 

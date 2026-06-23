@@ -15,7 +15,7 @@ You write Python functions and Markdown. The framework handles socket communicat
 ## Architecture
 
 ```
-User ←→ Channel (REPL/CLI) ──Unix socket── Session ──Unix socket── AI (OpenAI/Anthropic)
+User ←→ Channel (REPL/CLI) ── TCP/Unix/Named Pipe ── Session ── TCP/Unix/Named Pipe ── AI
 ```
 
 ## Quick Start

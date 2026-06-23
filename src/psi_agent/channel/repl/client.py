@@ -3,11 +3,13 @@ from __future__ import annotations
 import json
 import sys
 
-from aiohttp import ClientConnectorError, ClientSession, ClientTimeout, UnixConnector
+from aiohttp import ClientConnectorError, ClientSession, ClientTimeout
 from loguru import logger
 from prompt_toolkit.shortcuts import PromptSession
 from rich.console import Console
 from rich.panel import Panel
+
+from psi_agent._socket import resolve_connector_and_endpoint
 
 console = Console(highlight=False)
 
@@ -15,7 +17,7 @@ console = Console(highlight=False)
 async def run_repl(session_socket: str) -> None:
     logger.info(f"Connecting to session at {session_socket}")
 
-    connector = UnixConnector(path=session_socket)
+    connector, endpoint = resolve_connector_and_endpoint(session_socket)
     prompt_session = PromptSession(multiline=True)
 
     try:
@@ -41,7 +43,7 @@ async def run_repl(session_socket: str) -> None:
                 }
 
                 async with session.post(
-                    "http://localhost/chat/completions",
+                    endpoint,
                     json=req_data,
                 ) as resp:
                     if resp.status != 200:
