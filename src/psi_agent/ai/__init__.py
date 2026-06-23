@@ -73,11 +73,11 @@ class Ai:
 
     async def run(self) -> None:
         """Start the server and block until cancelled."""
+        setup_logging(verbose=self.verbose)
         provider = self.provider or os.environ.get("PSI_AI_PROVIDER", "")
         model = self.model or os.environ.get("PSI_AI_MODEL", "")
         api_key = self.api_key or os.environ.get("PSI_AI_API_KEY", "")
         base_url = self.base_url or os.environ.get("PSI_AI_BASE_URL", "")
-        setup_logging(verbose=self.verbose)
         await serve_ai(
             socket_path=self.session_socket,
             provider=provider,
