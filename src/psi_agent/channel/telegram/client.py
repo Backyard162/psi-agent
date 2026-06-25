@@ -1,0 +1,155 @@
+"""Telegram bot client — handler, file send, main loop."""
+
+from __future__ import annotations
+
+from datetime import date
+
+import anyio
+import platformdirs
+from loguru import logger
+from telegram import Update
+from telegram.ext import Application, ContextTypes, MessageHandler, filters
+
+from psi_agent.channel._core import ChannelCore
+from psi_agent.channel._types import Chunk, FileChunk, TextChunk
+
+
+def _allowed(user_id: int, allowed_ids: list[int] | None) -> bool:
+    if allowed_ids is None:
+        return True
+    return user_id in allowed_ids
+
+
+async def _send_file(update: Update, path: str) -> None:
+    if update.message is None:
+        return
+    logger.debug(f"_send_file: path={path}")
+    try:
+        await update.message.reply_photo(path)
+        logger.debug("_send_file: reply_photo OK")
+    except Exception as e:
+        logger.debug(f"_send_file: reply_photo failed ({e}), fallback to reply_document")
+        await update.message.reply_document(path)
+
+
+async def _build_chunks(update: Update) -> list[Chunk]:
+    if update.message is None:
+        return []
+
+    chunks: list[Chunk] = []
+    downloads = f"{platformdirs.user_downloads_dir()}/.psi/{date.today()}"
+    await anyio.Path(downloads).mkdir(parents=True, exist_ok=True)
+    logger.debug(f"_build_chunks: downloads_dir={downloads}")
+
+    if update.message.text:
+        logger.debug(f"_build_chunks: text ({len(update.message.text)} chars)")
+        chunks.append(TextChunk(update.message.text))
+    elif update.message.caption:
+        logger.debug(f"_build_chunks: caption ({len(update.message.caption)} chars)")
+        chunks.append(TextChunk(update.message.caption))
+
+    if update.message.photo:
+        photo = update.message.photo[-1]
+        logger.debug(f"_build_chunks: photo file_unique_id={photo.file_unique_id} size={photo.width}x{photo.height}")
+        tfile = await photo.get_file()
+        path = f"{downloads}/{photo.file_unique_id}"
+        await tfile.download_to_drive(path)
+        logger.debug(f"_build_chunks: photo downloaded to {path}")
+        chunks.append(FileChunk(path))
+
+    if update.message.document:
+        doc = update.message.document
+        logger.debug(f"_build_chunks: document file_name={doc.file_name} file_size={doc.file_size}")
+        tfile = await doc.get_file()
+        suffix = anyio.Path(doc.file_name or "").suffix
+        path = f"{downloads}/{doc.file_unique_id}{suffix}"
+        await tfile.download_to_drive(path)
+        logger.debug(f"_build_chunks: document downloaded to {path}")
+        chunks.append(FileChunk(path))
+
+    logger.debug(f"_build_chunks: total {len(chunks)} chunk(s)")
+    return chunks
+
+
+async def _handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if update.message is None or update.effective_user is None:
+        return
+
+    user_id = update.effective_user.id
+    core: ChannelCore = context.bot_data["core"]
+    allowed_ids: list[int] | None = context.bot_data["allowed_ids"]
+
+    if not _allowed(user_id, allowed_ids):
+        logger.debug(f"_handle_message: user {user_id} blocked by whitelist")
+        return
+
+    logger.debug(f"_handle_message: user_id={user_id}")
+
+    sent = await update.message.reply_text("...")
+    logger.debug("_handle_message: placeholder sent")
+
+    try:
+        chunks = await _build_chunks(update)
+    except Exception as e:
+        logger.error(f"_handle_message: _build_chunks failed — {e}")
+        await sent.edit_text(f"Error: {e}")
+        return
+
+    if not chunks:
+        logger.debug("_handle_message: no chunks, unsupported type")
+        await sent.edit_text("Unsupported message type")
+        return
+
+    logger.debug(f"_handle_message: posting {len(chunks)} chunk(s) to ChannelCore")
+    accumulated = ""
+    try:
+        async for chunk in core.post(chunks):
+            if isinstance(chunk, TextChunk):
+                accumulated += chunk.text
+                if accumulated.strip():
+                    await sent.edit_text(accumulated)
+                    logger.debug(f"_handle_message: edit_text ({len(accumulated)} chars)")
+            elif isinstance(chunk, FileChunk):
+                logger.debug(f"_handle_message: received FileChunk ({chunk.path})")
+                await _send_file(update, chunk.path)
+    except Exception as e:
+        logger.error(f"_handle_message: ChannelCore error — {e}")
+        await sent.edit_text(f"Error: {e}")
+        return
+
+    try:
+        await sent.edit_text(accumulated, parse_mode="Markdown")
+    except Exception as e:
+        logger.debug(f"_handle_message: Markdown edit failed — {e}")
+
+
+async def run_telegram(
+    *,
+    session_socket: str,
+    bot_token: str,
+    interval: float = 1.0,
+    allowed_user_ids: list[int] | None = None,
+    proxy: str = "",
+) -> None:
+    builder = Application.builder().token(bot_token)
+    if proxy:
+        logger.debug(f"run_telegram: proxy={proxy}")
+        builder = builder.proxy(proxy)
+    app = builder.build()
+    if not isinstance(app, Application):
+        raise TypeError("Failed to build Application")
+
+    async with ChannelCore(session_socket, interval=interval) as core:
+        app.bot_data["core"] = core
+        app.bot_data["allowed_ids"] = allowed_user_ids
+
+        app.add_handler(MessageHandler(~filters.COMMAND, _handle_message))
+        logger.debug("run_telegram: handler registered (~filters.COMMAND)")
+
+        await app.initialize()
+        await app.start()
+        if app.updater is None:
+            raise RuntimeError("Application has no updater")
+        await app.updater.start_polling()
+        logger.info(f"Telegram bot polling started (session={session_socket} interval={interval})")
+        await anyio.Event().wait()
