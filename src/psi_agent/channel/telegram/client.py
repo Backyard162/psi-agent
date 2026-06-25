@@ -51,21 +51,27 @@ async def _build_chunks(update: Update) -> list[Chunk]:
     if update.message.photo:
         photo = update.message.photo[-1]
         logger.debug(f"_build_chunks: photo file_unique_id={photo.file_unique_id} size={photo.width}x{photo.height}")
-        tfile = await photo.get_file()
-        path = f"{downloads}/{photo.file_unique_id}"
-        await tfile.download_to_drive(path)
-        logger.debug(f"_build_chunks: photo downloaded to {path}")
-        chunks.append(FileChunk(path))
+        try:
+            tfile = await photo.get_file()
+            path = f"{downloads}/{photo.file_unique_id}"
+            await tfile.download_to_drive(path)
+            logger.debug(f"_build_chunks: photo downloaded to {path}")
+            chunks.append(FileChunk(path))
+        except Exception as e:
+            logger.error(f"_build_chunks: photo download failed — {e}")
 
     if update.message.document:
         doc = update.message.document
         logger.debug(f"_build_chunks: document file_name={doc.file_name} file_size={doc.file_size}")
-        tfile = await doc.get_file()
-        suffix = anyio.Path(doc.file_name or "").suffix
-        path = f"{downloads}/{doc.file_unique_id}{suffix}"
-        await tfile.download_to_drive(path)
-        logger.debug(f"_build_chunks: document downloaded to {path}")
-        chunks.append(FileChunk(path))
+        try:
+            tfile = await doc.get_file()
+            suffix = anyio.Path(doc.file_name or "").suffix
+            path = f"{downloads}/{doc.file_unique_id}{suffix}"
+            await tfile.download_to_drive(path)
+            logger.debug(f"_build_chunks: document downloaded to {path}")
+            chunks.append(FileChunk(path))
+        except Exception as e:
+            logger.error(f"_build_chunks: document download failed — {e}")
 
     logger.debug(f"_build_chunks: total {len(chunks)} chunk(s)")
     return chunks
@@ -134,7 +140,7 @@ async def run_telegram(
     builder = Application.builder().token(bot_token)
     if proxy:
         logger.debug(f"run_telegram: proxy={proxy}")
-        builder = builder.proxy(proxy)
+        builder = builder.proxy(proxy).get_updates_proxy(proxy)
     app = builder.build()
     if not isinstance(app, Application):
         raise TypeError("Failed to build Application")
@@ -143,8 +149,8 @@ async def run_telegram(
         app.bot_data["core"] = core
         app.bot_data["allowed_ids"] = allowed_user_ids
 
-        app.add_handler(MessageHandler(~filters.COMMAND, _handle_message))
-        logger.debug("run_telegram: handler registered (~filters.COMMAND)")
+        app.add_handler(MessageHandler(filters.ALL, _handle_message))
+        logger.debug("run_telegram: handler registered (all messages)")
 
         await app.initialize()
         await app.start()

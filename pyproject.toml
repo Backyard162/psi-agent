@@ -21,7 +21,7 @@ dependencies = [
     "rich>=15.0.0",
     "any-llm-sdk>=1.18.0",
     "platformdirs>=4.0",
-    "python-telegram-bot>=22.0",
+    "python-telegram-bot[socks]>=22.0",
 ]
 
 [project.optional-dependencies]
