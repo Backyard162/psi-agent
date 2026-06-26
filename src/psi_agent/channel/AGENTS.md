@@ -79,7 +79,8 @@ Channel 层是 psi-agent 的用户界面层，负责连接 Session socket 并通
 ## Feishu 约定
 
 - 通过 lark-channel-sdk 的 `FeishuChannel.connect()` 进行 WebSocket 长连接
-- 所有消息（text/post/file）均转化为 Chunk：文本→TextChunk，文件→下载→FileChunk
+- 所有消息（text/post/file/audio）均转化为 Chunk：文本→TextChunk，文件→下载→FileChunk
+- `<audio key="..."/>` inline 标签通过 `message_resource.aget()` API 下载
 - 通过 `channel.stream()`  + `stream.append()` 实现卡片流式渲染
 - FileChunk 通过 `channel.send()` 发送文件；用户文件下载至 `Downloads/.psi/<date>/`
 - 认证：`--app-id` + `--app-secret` CLI args > `PSI_FEISHU_APP_ID` / `PSI_FEISHU_APP_SECRET` env

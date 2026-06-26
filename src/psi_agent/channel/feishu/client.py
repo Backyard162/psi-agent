@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import re
 from datetime import date
 from typing import Any
 
 import anyio
 import platformdirs
 from lark_channel import FeishuChannel
+from lark_channel.api.im.v1.model.get_message_resource_request import GetMessageResourceRequest
 from loguru import logger
 
 from psi_agent.channel._core import ChannelCore
@@ -35,9 +37,30 @@ async def _build_chunks(channel: Any, ctx: Any, downloads: str) -> list[Chunk]:
     chunks: list[Chunk] = []
     logger.debug(f"_build_chunks: downloads_dir={downloads} raw_content_type={ctx.raw_content_type}")
 
-    if ctx.content_text:
-        logger.debug(f"_build_chunks: content_text ({len(ctx.content_text)} chars)")
-        chunks.append(TextChunk(ctx.content_text))
+    text = ctx.content_text or ""
+    for m in re.finditer(r'<audio\s+key="([^"]+)"', text):
+        audio_key = m.group(1)
+        logger.debug(f"_build_chunks: audio key={audio_key}")
+        suffix = f".{ctx.raw_content_type}" if ctx.raw_content_type in ("audio",) else ""
+        path = f"{downloads}/{audio_key[-32:]}{suffix}"
+        try:
+            req = (
+                GetMessageResourceRequest.builder()
+                .message_id(ctx.message_id)
+                .file_key(audio_key)
+                .type("file")
+                .build()
+            )
+            resp = await channel.client.im.v1.message_resource.aget(req)
+            await anyio.Path(path).write_bytes(resp.file.read())
+            logger.debug(f"_build_chunks: audio saved to {path}")
+            chunks.append(FileChunk(path))
+        except Exception as e:
+            logger.error(f"_build_chunks: audio download failed — {e}")
+
+    if text:
+        logger.debug(f"_build_chunks: content_text ({len(text)} chars)")
+        chunks.append(TextChunk(text))
 
     for r in ctx.resources:
         logger.debug(f"_build_chunks: resource type={r.type} file_key={r.file_key} file_name={r.file_name}")

@@ -24,8 +24,8 @@ Channel 层新增 Feishu（飞书）通道，通过 `lark-channel-sdk` 将飞书
 
 | 飞书消息类型 | Chunk 映射 |
 |-------------|-----------|
-| `ctx.content_text` 非空（text、post 等） | `TextChunk(content_text)` |
-| `ctx.resources` 中每个 resource（image、file、audio、video、sticker） | `channel.download_resource_to_file()` → `FileChunk(path)` |
+| `ctx.content_text` 中的 `<audio key="..."/>` inline 标签 | parse key → `channel.client.im.v1.message_resource.aget()` → `FileChunk(path)` |
+| `ctx.resources` 中每个 resource（image、file、video、sticker） | `channel.download_resource_to_file()` → `FileChunk(path)` |
 
 ---
 
