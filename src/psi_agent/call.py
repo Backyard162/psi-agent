@@ -22,6 +22,8 @@ async def call_agent(
     workspace: str,
     ai_socket: str,
     message: str,
+    *,
+    session_id: str | None = None,
     verbose: bool = False,
 ) -> str:
     """Start a session, send a message, and return the agent's response.
@@ -38,6 +40,7 @@ async def call_agent(
         workspace=workspace,
         channel_socket=channel_socket,
         ai_socket=ai_socket,
+        session_id=session_id,
         verbose=verbose,
     )
 
@@ -69,6 +72,9 @@ class Call:
     ai_socket: str
     """AI backend address: Unix socket path, ``http://host:port``, or Named Pipe."""
 
+    session_id: str | None = None
+    """Session history identifier.  ``None`` → auto-generate UUID."""
+
     message: str
     """Message to send to the agent."""
 
@@ -82,6 +88,7 @@ class Call:
                 workspace=self.workspace,
                 ai_socket=self.ai_socket,
                 message=self.message,
+                session_id=self.session_id,
                 verbose=self.verbose,
             )
             print(text)
