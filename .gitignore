@@ -8,3 +8,17 @@ dist/
 .pytest_cache/
 *.sock
 .coverage
+
+# Local config & session memory
+.opencode/
+
+# Review docs from other branches
+docs/
+
+# Local test scripts & configs
+_test_*.py
+_test_*.yml
+test-*.yml
+
+# Bug report for local reference
+_BUG_REPORT.md
