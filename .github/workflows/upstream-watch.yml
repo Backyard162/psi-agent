@@ -21,11 +21,17 @@ jobs:
       - name: Add upstream remote
         run: |
           git remote add upstream https://github.com/genuineknowledge/psi-agent.git
-          git fetch upstream main
+          GIT_TERMINAL_PROMPT=0 timeout 30 git fetch upstream main || echo "Warning: upstream fetch failed, skipping"
 
       - name: Detect conflicts
         id: detect
         run: |
+          git rev-parse upstream/main &>/dev/null || {
+            echo "NO_CHANGE=true" >> "$GITHUB_ENV"
+            echo "conflict=" >> "$GITHUB_OUTPUT"
+            exit 0
+          }
+
           MERGE_BASE=$(git merge-base HEAD upstream/main)
           UPSTREAM_TIP=$(git rev-parse upstream/main)
 
@@ -60,7 +66,7 @@ jobs:
             --label upstream-watch \
             --state open \
             --json number \
-            --jq '.[0].number' 2>/dev/null)
+            --jq '.[0].number // empty' 2>/dev/null)
 
           if [ -n "$EXISTING" ]; then
             gh issue update "$EXISTING" \
@@ -85,7 +91,7 @@ jobs:
             --label upstream-watch \
             --state open \
             --json number \
-            --jq '.[0].number' 2>/dev/null)
+            --jq '.[0].number // empty' 2>/dev/null)
 
           if [ -n "$EXISTING" ]; then
             gh issue close "$EXISTING" \
