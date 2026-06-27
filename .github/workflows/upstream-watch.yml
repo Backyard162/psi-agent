@@ -21,13 +21,13 @@ jobs:
       - name: Add upstream remote
         run: |
           git remote add upstream https://github.com/genuineknowledge/psi-agent.git
-          GIT_TERMINAL_PROMPT=0 timeout 30 git fetch upstream main || echo "Warning: upstream fetch failed, skipping"
+          GIT_TERMINAL_PROMPT=0 timeout 30 git fetch upstream main \
+            || echo "Warning: upstream fetch failed"
 
       - name: Detect conflicts
         id: detect
         run: |
           git rev-parse upstream/main &>/dev/null || {
-            echo "NO_CHANGE=true" >> "$GITHUB_ENV"
             echo "conflict=" >> "$GITHUB_OUTPUT"
             exit 0
           }
@@ -36,7 +36,6 @@ jobs:
           UPSTREAM_TIP=$(git rev-parse upstream/main)
 
           if [ "$MERGE_BASE" = "$UPSTREAM_TIP" ]; then
-            echo "NO_CHANGE=true" >> "$GITHUB_ENV"
             echo "conflict=" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -45,56 +44,22 @@ jobs:
           UPSTREAM_FILES=$(git diff --name-only "$MERGE_BASE"..upstream/main)
           CONFLICT=$(comm -12 <(echo "$OUR_FILES" | sort -u) <(echo "$UPSTREAM_FILES" | sort -u))
 
-          echo "NO_CHANGE=false" >> "$GITHUB_ENV"
           {
             echo "conflict<<DELIM"
             echo "$CONFLICT"
             echo "DELIM"
           } >> "$GITHUB_OUTPUT"
 
-      - name: Create or update Issue
-        if: env.NO_CHANGE == 'false'
+      - name: Warn on conflict
+        if: steps.detect.outputs.conflict != ''
         env:
-          GH_TOKEN: ${{ github.token }}
           CONFLICT: ${{ steps.detect.outputs.conflict }}
         run: |
-          TITLE="[Auto] 上游文件变更告警"
-          BODY="## 上游 main 新增了 commit，涉及以下重叠文件：\n\n${CONFLICT}\n\n### 建议操作\n\`\`\`\ngit fetch upstream main\ngit rebase upstream/main\n\`\`\`\n\n_自动检测于 $(date -u +'%Y-%m-%d %H:%M UTC')_"
-
-          EXISTING=$(gh issue list \
-            --repo Backyard162/psi-agent \
-            --label upstream-watch \
-            --state open \
-            --json number \
-            --jq '.[0].number // empty' 2>/dev/null)
-
-          if [ -n "$EXISTING" ]; then
-            gh issue update "$EXISTING" \
-              --repo Backyard162/psi-agent \
-              --title "$TITLE" \
-              --body "$BODY"
-          else
-            gh issue create \
-              --repo Backyard162/psi-agent \
-              --title "$TITLE" \
-              --body "$BODY" \
-              --label upstream-watch
-          fi
-
-      - name: Close resolved Issue
-        if: env.NO_CHANGE == 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          EXISTING=$(gh issue list \
-            --repo Backyard162/psi-agent \
-            --label upstream-watch \
-            --state open \
-            --json number \
-            --jq '.[0].number // empty' 2>/dev/null)
-
-          if [ -n "$EXISTING" ]; then
-            gh issue close "$EXISTING" \
-              --repo Backyard162/psi-agent \
-              --comment "上游冲突已解决，自动关闭。"
-          fi
+          echo "::warning::上游 main 改动了以下重叠文件，建议及时 rebase："
+          while IFS= read -r f; do
+            echo "::warning::  • $f"
+          done <<< "$CONFLICT"
+          echo ""
+          echo "建议执行："
+          echo "  git fetch upstream main"
+          echo "  git rebase upstream/main"
