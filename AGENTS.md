@@ -112,7 +112,7 @@ SSE 流中的特殊字段：
 
 2. **流式（SSE 层面）**：已 commit HTTP 200 后发生的错误（上游异常、连接断开等），使用 ChatCompletionChunk 格式
    ```json
-   {"id": "error", "choices": [{"index": 0, "delta": {"content": "[Upstream Error 401]: ..."}, "finish_reason": "error"}]}
+   {"id": "error", "choices": [{"index": 0, "delta": {"content": "[Upstream Error]: ..."}, "finish_reason": "error"}]}
    ```
    所有层统一使用 `finish_reason="error"` 标记流式错误，Session 检测到后不写入 conversation history。
 
@@ -125,6 +125,7 @@ SSE 流中的特殊字段：
 - DEBUG 必须覆盖：每个 SSE chunk、tool 执行、锁获取/释放
 - 格式：`时间 | 级别 | 模块:函数:行号 - 消息`
 - Channel 客户端使用 `rich.console.Console` 做终端输出，**禁止使用 `print()`**
+- **`setup_logging` 一次性生效（刻意设计）**：用全局 `_handler_id` 守卫，首次调用安装 handler，后续调用直接返回旧 handler，**不会**重新应用 `verbose`。因此“谁先调用谁定级别”。在 `psi-agent run`（批量模式）下，`Run.run()` 先于所有子组件调用 `setup_logging(verbose=True)`，故批量模式始终为 DEBUG，各组件配置里的 `verbose` 字段被有意忽略。单独启动某个组件（`psi-agent ai/session/channel ...`）时，则由该组件自己的 `verbose` 决定级别。
 
 ## 关键注意事项（踩坑经验）
 
@@ -152,8 +153,9 @@ SSE 流中的特殊字段：
 
 - **框架**: `pytest` + `pytest-asyncio`（`asyncio_mode = "auto"`，anyio backend）
 - **异步测试**: `@pytest.mark.anyio`
-- **测试目录结构**: 镜像 `src/psi_agent/`
-- **集成测试**: 独立目录 `tests/integration/`，用 `tests/__init__.py` 和 `tests/integration/__init__.py` 使 test 目录成为 package
+- **测试目录结构**: 镜像 `src/psi_agent/`（如 `ai/server.py` → `tests/psi_agent/ai/test_server.py`）
+- **整个 `tests/` 树是 package**: 每层目录都放 `__init__.py`（`tests/__init__.py`、`tests/psi_agent/__init__.py`、`tests/psi_agent/ai/__init__.py`……）。这样 pytest 以**全限定模块名**导入测试，不同目录下允许同名文件并存（如 `ai/test_server.py` 与 `session/test_server.py`）。**漏掉某层 `__init__.py`**会让同名 test 文件在默认 prepend import 模式下被当成顶层同名模块，触发 `import file mismatch` 冲突
+- **集成测试**: 放在独立目录 `tests/integration/`（同样含 `__init__.py`）
 - **无需 conftest path hack**: `uv sync` 将 psi-agent 安装为 editable package，`import psi_agent` 直接可用
 - **Mock AI socket**: `aiohttp.web.Application` + `UnixSite`/`SockSite`（获取随机端口用预绑定 socket）
 - **`@pytest.mark.schedule`**：标记需要 >30s 的 schedule 相关测试，`pytest -m "not schedule"` 跳过
@@ -184,8 +186,9 @@ async def handler(request):
 - **ruff**: `select = ["E", "F", "I", "W", "UP", "ASYNC", "SIM", "C4", "B", "RUF", "N", "T20", "PLC"]`
 - **ty**: 全局 `ty check .`
 - **per-file-ignores**: **零条**。所有代码通过自身符合规则，不靠抑制
-- **仅 1 处 ty:ignore**（无法避免）：
-  - `conftest.py:109` — pytest async generator fixture 的返回类型局限（`yield` 导致函数被推断为 AsyncGenerator，与标注的 MockAIServer 冲突）
+- **核心代码（`src/` + `tests/`）仅 1 处 ty:ignore**（无法避免）：
+  - `tests/integration/conftest.py:109` — pytest async generator fixture 的返回类型局限（`yield` 导致函数被推断为 AsyncGenerator，与标注的 MockAIServer 冲突）
+- **例外**：`examples/` 下的示例 workspace（如 `a-serper-mcp-workspace/tools/_mcp.py`）含若干 `# ty: ignore`（动态 MCP 工具的运行时签名构造），属示例代码，不计入上述核心约定。
 
 `cast` 不能解决 conftest 的问题——`cast` 是表达式级工具，无法修改 async generator 函数的返回类型。`# ty: ignore` 是正确的标准解法。
 
@@ -209,6 +212,18 @@ uv run pytest -v                 # 全部测试
 uv run psi-agent --help          # CLI 帮助
 uv build                         # 构建
 ```
+
+## 改动后自检清单（Definition of Done）
+
+任何代码改动完成后、提交前，必须逐条核对以下四项：
+
+1. **文档同步**：检查 `AGENTS.md`（含各层 `*/AGENTS.md`）、`README.md` / `README_en.md`、`docs/`、`specs/`、`plans/` 中是否有因本次改动而过时或缺失的内容。凡改了行为 / 协议 / 配置项 / 默认值，就同步对应文档；新增任何刻意为之的「反直觉」行为，必须在 AGENTS.md 留痕，避免后人误当 bug 修掉。
+
+2. **日志粒度对齐**：检查 loguru 日志是否完整——不要漏掉应有的日志（关键分支、IO、错误、生命周期）。新增日志的 level 必须与**周围既有代码**保持一致：每个 SSE chunk / tool 执行 / 锁获取释放走 DEBUG，启动 / 关闭 / 请求完成走 INFO，可恢复异常走 WARNING，不可恢复错误走 ERROR。不要凭空拔高或压低 level。
+
+3. **异常与取消安全**：检查改动点及其邻近代码是否异常安全——被 `cancel` 时会不会出问题？是否存在 cancel 时资源泄露（未关闭的 socket / `AppRunner` / 文件 / 子进程 / 上游 streaming 连接）？清理代码必须放在 `finally` 或 `except` 中，跨 `await` 的清理用 `anyio.CancelScope(shield=True)` 保护。注意 `CancelledError` 是 `BaseException`，不在 `Exception` 之下——`except Exception` 不会（也不应）吞掉它；严禁用 `except BaseException` 误吞取消信号。
+
+4. **测试补充**：为新增 / 变更的逻辑补 unit test；涉及跨组件交互（socket、SSE、agent loop、错误传播）的补 integration test。测试目录镜像 `src/psi_agent/`，集成测试放 `tests/integration/`。改完后跑 `uv run pytest` 确认通过。
 
 ## 未来扩展方向
 
