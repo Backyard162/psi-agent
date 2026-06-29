@@ -9,7 +9,7 @@ import anyio
 import pytest
 from aiohttp import ClientSession, ClientTimeout, UnixConnector, web
 
-from psi_agent._socket import wait_for_socket
+from psi_agent._sockets import wait_for_socket
 from psi_agent.session.agent import SessionAgent
 from psi_agent.session.ai_client import AiClient
 from psi_agent.session.schedule_registry import ScheduleRegistry

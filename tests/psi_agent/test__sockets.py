@@ -8,7 +8,7 @@ import anyio
 import pytest
 from aiohttp import web
 
-from psi_agent._socket import (
+from psi_agent._sockets import (
     _DEFAULT_POLL_INTERVAL,
     _DEFAULT_SOCKET_TIMEOUT,
     _SOCKET_ACCEPT_GRACE,

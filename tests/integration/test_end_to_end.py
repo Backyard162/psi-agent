@@ -8,7 +8,7 @@ import anyio
 import pytest
 from aiohttp import web
 
-from psi_agent._socket import wait_for_socket
+from psi_agent._sockets import wait_for_socket
 from tests.integration.conftest import MockAIServer, read_sse
 
 

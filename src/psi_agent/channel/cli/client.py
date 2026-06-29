@@ -3,7 +3,7 @@ from __future__ import annotations
 from loguru import logger
 from rich.console import Console
 
-from psi_agent._socket import wait_for_socket
+from psi_agent._sockets import wait_for_socket
 from psi_agent.channel._core import ChannelCore
 from psi_agent.channel._types import ReasoningChunk, TextChunk
 

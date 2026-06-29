@@ -9,7 +9,7 @@ from loguru import logger
 from rich.console import Console
 
 from psi_agent._logging import setup_logging
-from psi_agent._socket import wait_for_socket
+from psi_agent._sockets import wait_for_socket
 from psi_agent.channel._core import ChannelCore
 from psi_agent.channel._types import TextChunk
 from psi_agent.session import Session
