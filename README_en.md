@@ -15,7 +15,7 @@ You write Python functions and Markdown. The framework handles socket communicat
 ## Architecture
 
 ```
-User ←→ Channel (REPL/CLI) ── TCP/Unix/Named Pipe ── Session ── TCP/Unix/Named Pipe ── AI
+User ←→ Channel (REPL/CLI/Telegram/Feishu) ── TCP/Unix/Named Pipe ── Session ── TCP/Unix/Named Pipe ── AI
 ```
 
 ## Quick Start
@@ -36,7 +36,7 @@ uv run psi-agent ai \
   --api-key $OPENAI_API_KEY \
   --base-url https://api.openai.com/v1
 
-# Terminal 2: Start Session
+# Terminal 2: Start Session (--workspace optional, defaults to .)
 uv run psi-agent session \
   --workspace ./examples/a-simple-bash-only-workspace \
   --channel-socket ./channel.sock \
@@ -60,11 +60,15 @@ uv run psi-agent channel cli \
 
 ```
 psi-agent
+├── run                       # Batch launch (psi-agent run config.yml)
 ├── ai                        # Unified AI backend (50+ providers)
+├── gateway                   # Lifecycle management + REST API + Web Console
 ├── session                    # Session + workspace management
 └── channel
     ├── repl                   # Interactive REPL
-    └── cli                    # One-shot message
+    ├── cli                    # One-shot message
+    ├── telegram               # Telegram bot
+    └── feishu                 # Feishu bot
 ```
 
 ## Define Your Own Agent

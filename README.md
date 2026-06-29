@@ -36,7 +36,7 @@ uv run psi-agent ai \
   --api-key $OPENAI_API_KEY \
   --base-url https://api.openai.com/v1
 
-# 终端 2：启动 Session
+# 终端 2：启动 Session（--workspace 可选，默认当前目录）
 uv run psi-agent session \
   --workspace ./examples/a-simple-bash-only-workspace \
   --channel-socket ./channel.sock \
@@ -60,8 +60,11 @@ uv run psi-agent channel cli \
 
 ```
 psi-agent
+├── run                       # 批量启动（psi-agent run config.yml）
 ├── ai                        # 统一 AI 后端（支持 50+ provider）
+├── gateway                   # 生命周期管理 + REST API + Web Console
 ├── session                    # Session + workspace 管理
+├── call                       # 启动 session → 发消息 → 打印回复到 stdout
 └── channel
     ├── repl                   # 交互式 REPL
     ├── cli                    # 单次消息

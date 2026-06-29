@@ -3,19 +3,23 @@ from __future__ import annotations
 from loguru import logger
 from rich.console import Console
 
+from psi_agent._sockets import wait_for_socket
 from psi_agent.channel._core import ChannelCore
-from psi_agent.channel._types import TextChunk
+from psi_agent.channel._types import ReasoningChunk, TextChunk
 
 console = Console(highlight=False)
 
 
 async def run_cli(*, session_socket: str, message: str) -> None:
     logger.info(f"Connecting to session at {session_socket}")
+    await wait_for_socket(session_socket)
 
     try:
         async with ChannelCore(session_socket, interval=0.0) as core:
             async for chunk in core.post([TextChunk(message)]):
-                if isinstance(chunk, TextChunk):
+                if isinstance(chunk, ReasoningChunk):
+                    console.print(chunk.text, end="", style="dim")
+                elif isinstance(chunk, TextChunk):
                     console.print(chunk.text, end="")
     except Exception as e:
         logger.error(f"CLI error: {e}")

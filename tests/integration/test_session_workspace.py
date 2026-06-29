@@ -9,9 +9,11 @@ import anyio
 import pytest
 from aiohttp import ClientSession, ClientTimeout, UnixConnector, web
 
+from psi_agent._sockets import wait_for_socket
 from psi_agent.session.agent import SessionAgent
-from psi_agent.session.scheduler import load_schedules_from_workspace
-from psi_agent.session.tools import load_tools_from_workspace
+from psi_agent.session.ai_client import AiClient
+from psi_agent.session.schedule_registry import ScheduleRegistry
+from psi_agent.session.tool_registry import ToolRegistry
 from tests.integration.conftest import MockAIServer
 
 
@@ -28,17 +30,6 @@ def _chunk(content: str = "", finish_reason: str | None = None) -> str:
             "choices": [{"index": 0, "delta": d, "finish_reason": finish_reason}],
         }
     )
-
-
-async def _wait_socket(sock_path: str, timeout_sec: float = 15.0) -> bool:
-    deadline = anyio.current_time() + timeout_sec
-    ap = anyio.Path(sock_path)
-    while anyio.current_time() < deadline:
-        if await ap.exists():
-            await anyio.sleep(0.3)
-            return True
-        await anyio.sleep(0.1)
-    return False
 
 
 async def _stop_process(proc) -> None:
@@ -59,11 +50,11 @@ async def test_missing_tools_dir_graceful(tmp_path: Path, mock_ai_server: MockAI
     (ws / "systems").mkdir()
     (ws / "systems" / "system.py").write_text("async def system_prompt_builder() -> str:\n    return 'test'\n")
 
-    tools, _ = await load_tools_from_workspace(ws / "tools")
-    assert len(tools) == 0
+    tr = await ToolRegistry.load(ws / "tools")
+    assert len(tr.tools) == 0
 
-    agent = SessionAgent(ai_socket=base_url, tools=tools)
-    agent.history.append({"role": "system", "content": "test"})
+    agent = SessionAgent(ai_client=AiClient(base_url), tool_registry=tr)
+    agent._conversation.messages.append({"role": "system", "content": "test"})
     chunks = []
     async for c in agent.run({"role": "user", "content": "hi"}):
         chunks.append(c)
@@ -73,7 +64,7 @@ async def test_missing_tools_dir_graceful(tmp_path: Path, mock_ai_server: MockAI
 @pytest.mark.anyio
 async def test_missing_schedules_dir_graceful(tmp_path: Path) -> None:
 
-    schedules = await load_schedules_from_workspace(tmp_path / "nonexistent")
+    schedules = await ScheduleRegistry._load_from_dir(tmp_path / "nonexistent")
     assert len(schedules) == 0
 
 
@@ -82,8 +73,8 @@ async def test_missing_system_py(mock_ai_server: MockAIServer) -> None:
     mock_ai_server.set_responses([_chunk(content="no system", finish_reason="stop")])
     base_url = await mock_ai_server.start()
 
-    agent = SessionAgent(ai_socket=base_url, tools={})
-    assert len(agent.history) == 0
+    agent = SessionAgent(ai_client=AiClient(base_url), tool_registry=ToolRegistry())
+    assert len(agent._conversation.messages) == 0
 
     chunks = []
     async for c in agent.run({"role": "user", "content": "hi"}):
@@ -156,8 +147,8 @@ async def test_system_prompt_builder_raises_exception_caught(tmp_path: Path) -> 
     )
 
     try:
-        assert await _wait_socket(ai_socket)
-        assert await _wait_socket(channel_socket)
+        await wait_for_socket(ai_socket, max_wait=15.0)
+        await wait_for_socket(channel_socket, max_wait=15.0)
 
         timeout = ClientTimeout(total=5)
         connector = UnixConnector(path=channel_socket)
@@ -202,16 +193,16 @@ async def test_full_workspace_normal_conversation(tmp_path: Path, mock_ai_server
     )
     base_url = await mock_ai_server.start()
 
-    tools, _ = await load_tools_from_workspace(ws / "tools")
-    assert len(tools) == 1
+    tr = await ToolRegistry.load(ws / "tools")
+    assert len(tr.tools) == 1
 
-    agent = SessionAgent(ai_socket=base_url, tools=tools)
-    agent.history.append({"role": "system", "content": "You are a test assistant."})
+    agent = SessionAgent(ai_client=AiClient(base_url), tool_registry=tr)
+    agent._conversation.messages.append({"role": "system", "content": "You are a test assistant."})
     chunks = []
     async for c in agent.run({"role": "user", "content": "hello"}):
         chunks.append(c)
     assert len(chunks) > 0
-    content = "".join(c.choices[0].delta.content or "" for c in chunks if c.choices)
+    content = "".join(c.content or "" for c in chunks)
     assert len(content) > 0
 
 
@@ -229,10 +220,69 @@ async def test_unicode_message_handling(tmp_path: Path, mock_ai_server: MockAISe
         "async def system_prompt_builder() -> str:\n    return 'You are a test assistant.'\n"
     )
 
-    tools, _ = await load_tools_from_workspace(ws / "tools")
-    agent = SessionAgent(ai_socket=base_url, tools=tools)
+    tr = await ToolRegistry.load(ws / "tools")
+    agent = SessionAgent(ai_client=AiClient(base_url), tool_registry=tr)
 
     msg = "你好世界 🌍 — emoji and unicode test"
     chunks = [c async for c in agent.run({"role": "user", "content": msg})]
-    content = "".join(c.choices[0].delta.content or "" for c in chunks if c.choices)
+    content = "".join(c.content or "" for c in chunks)
     assert len(content) > 0, "Should receive a response for unicode message"
+
+
+@pytest.mark.anyio
+async def test_session_with_empty_workspace_uses_cwd(tmp_path: Path, mock_ai_server: MockAIServer) -> None:
+    """Session started via CLI without --workspace should use CWD."""
+    mock_ai_server.set_responses([_chunk(content="hello from cwd", finish_reason="stop")])
+    base_url = await mock_ai_server.start()
+
+    ai_socket = str(tmp_path / "ai.sock")
+    channel_socket = str(tmp_path / "channel.sock")
+
+    proc = await anyio.open_process(
+        [
+            "uv",
+            "run",
+            "psi-agent",
+            "session",
+            "--channel-socket",
+            channel_socket,
+            "--ai-socket",
+            ai_socket,
+        ]
+    )
+    ai_proc = await anyio.open_process(
+        [
+            "uv",
+            "run",
+            "psi-agent",
+            "ai",
+            "--provider",
+            "openai",
+            "--session-socket",
+            ai_socket,
+            "--model",
+            "test",
+            "--api-key",
+            "k",
+            "--base-url",
+            base_url,
+        ]
+    )
+
+    try:
+        await wait_for_socket(ai_socket, max_wait=15.0)
+        await wait_for_socket(channel_socket, max_wait=15.0)
+
+        timeout = ClientTimeout(total=5)
+        connector = UnixConnector(path=channel_socket)
+        async with (
+            ClientSession(connector=connector, timeout=timeout) as session,
+            session.post(
+                "http://localhost/chat/completions",
+                json={"model": "test", "messages": [{"role": "user", "content": "hi"}], "stream": True},
+            ) as resp,
+        ):
+            assert resp.status == 200, f"Session should start without --workspace: {resp.status}"
+    finally:
+        await _stop_process(proc)
+        await _stop_process(ai_proc)
