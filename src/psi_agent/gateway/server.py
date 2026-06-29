@@ -61,7 +61,7 @@ def create_app(aim: AIManager, sm: SessionManager, favicon_path: str | None = No
     app["favicon_path"] = favicon_path
 
     spa_dist = Path(__file__).parent / "spa" / "dist"
-    if spa_dist.exists():
+    if os.path.exists(str(spa_dist)):
         app.router.add_static("/spa/", str(spa_dist), show_index=False)
     app.router.add_get("/", _handle_spa)
     app.router.add_get("/spa", _handle_spa)
@@ -201,7 +201,7 @@ async def _generate_title(request: web.Request) -> web.Response:
 
 async def _browse_workspace(request: web.Request) -> web.Response:
     wm: WorkspaceManager = request.app["wm"]
-    path = request.query.get("path") or str(Path.cwd())
+    path = request.query.get("path") or str(await anyio.Path.cwd())
     try:
         result = await wm.browse(path)
         parent = str(Path(path).parent)
